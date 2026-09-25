@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
 import lightgbm as lgb
@@ -21,7 +21,8 @@ from mos_trans.preprocessing import build_dataset
 
 
 QUANTILES = (0.1, 0.5, 0.9)
-CANDIDATES = ("catboost_base", "catboost_progress", "lightgbm_base", "lightgbm_no_vehicle_id",
+CANDIDATES = ("catboost_base", "catboost_progress", "catboost_ordered",
+              "catboost_ordered_no_vehicle_id", "lightgbm_base", "lightgbm_no_vehicle_id",
               "lightgbm_progress", "lightgbm_quantiles")
 
 
@@ -35,13 +36,15 @@ class CompareConfig:
     learning_rate: float = 0.03
     seed: int = 42
     threads: int = 4
+    tuned_lightgbm: dict | None = None
 
 
-def _catboost(config: CompareConfig) -> CatBoostClassifier:
+def _catboost(config: CompareConfig, *, ordered: bool = False) -> CatBoostClassifier:
     return CatBoostClassifier(loss_function="Logloss", iterations=config.catboost_trees,
                               learning_rate=config.learning_rate, depth=config.depth,
                               l2_leaf_reg=8, random_seed=config.seed,
-                              thread_count=config.threads, allow_writing_files=False, verbose=False)
+                              thread_count=config.threads, allow_writing_files=False, verbose=False,
+                              boosting_type="Ordered" if ordered else "Plain")
 
 
 def _lightgbm(config: CompareConfig, *, quantile: float | None = None):
@@ -130,18 +133,25 @@ def _fit_predict(name: str, fit: pd.DataFrame, other: pd.DataFrame,
     return _predict_fitted(_fit_model(name, fit, config), other)
 
 
+def _catboost_frame(frame: pd.DataFrame, no_vehicle_id: bool) -> pd.DataFrame:
+    source = frame.assign(tr_id="0") if no_vehicle_id else frame
+    matrix = model_input(source, list(BASE_FEATURES))
+    return matrix.drop(columns="tr_id") if no_vehicle_id else matrix
+
+
 def _fit_model(name: str, fit: pd.DataFrame, config: CompareConfig) -> dict:
     if name == "catboost_lightgbm_blend":
         return {"name": name, "members": [_fit_model("catboost_progress", fit, config),
                                            _fit_model("lightgbm_progress", fit, config)]}
-    columns = [column for column in BASE_FEATURES if name != "lightgbm_no_vehicle_id" or column != "tr_id"]
+    no_vehicle_id = name in {"lightgbm_no_vehicle_id", "lightgbm_tuned"}
+    columns = [column for column in BASE_FEATURES if not no_vehicle_id or column != "tr_id"]
     columns += list(PROGRESS_FEATURES) if name.endswith("progress") or name == "lightgbm_quantiles" else []
     if name.startswith("catboost"):
         # Same numeric vehicle-ID treatment and feature order as the current classifier.
-        fit_x = model_input(fit, list(BASE_FEATURES))
+        fit_x = _catboost_frame(fit, name.endswith("no_vehicle_id"))
         if name.endswith("progress"):
             fit_x = pd.concat([fit_x, fit.loc[:, list(PROGRESS_FEATURES)]], axis=1)
-        model = _catboost(config)
+        model = _catboost(config, ordered=name.startswith("catboost_ordered"))
         model.fit(fit_x, labels(fit.target_delay_s), cat_features=list(CATEGORICAL))
         return {"name": name, "model": model}
     fit_x, _ = _lightgbm_frames(fit, fit, columns)
@@ -155,7 +165,13 @@ def _fit_model(name: str, fit: pd.DataFrame, config: CompareConfig) -> dict:
             model.fit(fit_x, residual, categorical_feature=list(categories))
             models.append(model)
         return {"name": name, "models": models, "categories": categories}
-    model = _lightgbm(config)
+    if name == "lightgbm_tuned":
+        if config.tuned_lightgbm is None:
+            raise ValueError("Tuned LightGBM parameters missing")
+        model = lgb.LGBMClassifier(objective="binary", random_state=config.seed,
+                                   n_jobs=config.threads, verbosity=-1, **config.tuned_lightgbm)
+    else:
+        model = _lightgbm(config)
     model.fit(fit_x, labels(fit.target_delay_s), categorical_feature=list(categories))
     return {"name": name, "model": model, "categories": categories}
 
@@ -167,11 +183,12 @@ def _predict_fitted(artifact: dict, frame: pd.DataFrame) -> np.ndarray:
     if name == "catboost_lightgbm_blend":
         return np.mean([_predict_fitted(member, frame) for member in artifact["members"]], axis=0)
     if name.startswith("catboost"):
-        matrix = model_input(frame, list(BASE_FEATURES))
+        matrix = _catboost_frame(frame, name.endswith("no_vehicle_id"))
         if name.endswith("progress"):
             matrix = pd.concat([matrix, frame.loc[:, list(PROGRESS_FEATURES)]], axis=1)
         return artifact["model"].predict_proba(matrix)[:, 1]
-    columns = [column for column in BASE_FEATURES if name != "lightgbm_no_vehicle_id" or column != "tr_id"]
+    no_vehicle_id = name in {"lightgbm_no_vehicle_id", "lightgbm_tuned"}
+    columns = [column for column in BASE_FEATURES if not no_vehicle_id or column != "tr_id"]
     columns += list(PROGRESS_FEATURES) if name.endswith("progress") or name == "lightgbm_quantiles" else []
     matrix = frame.loc[:, columns].copy()
     for column, categories in artifact["categories"].items():
@@ -205,19 +222,20 @@ def run(dataset_zip: str | Path, processed_dir: str | Path, cache_dir: str | Pat
     real_ids = sorted(set(family_id[~train.tr_id.astype(str).str.startswith("900")]))
     if len(real_ids) != 13:
         raise ValueError(f"Expected 13 original vehicle families, got {len(real_ids)}")
+    candidates = CANDIDATES + (("lightgbm_tuned",) if config.tuned_lightgbm is not None else ())
     oof_rows = []
     for held in real_ids:
         fit = train.loc[family_id != held]
         held_frame = train.loc[(family_id == held) & (train.tr_id.astype(str) == held)]
         row = pd.DataFrame({"sample_id": held_frame.sample_id.astype(str).to_numpy(),
                             "tr_id": held, "actual_class": labels(held_frame.target_delay_s)})
-        for name in CANDIDATES:
+        for name in candidates:
             row[name] = _fit_predict(name, fit, held_frame, config)
         oof_rows.append(row)
         print(f"Completed family {held} ({len(held_frame)} real points)", flush=True)
     oof = pd.concat(oof_rows, ignore_index=True)
     oof["catboost_lightgbm_blend"] = (oof.catboost_progress + oof.lightgbm_progress) / 2
-    names = list(CANDIDATES) + ["catboost_lightgbm_blend"]
+    names = list(candidates) + ["catboost_lightgbm_blend"]
     comparison = {}
     for name in names:
         threshold, selected_f1 = _threshold(oof, name)
@@ -265,8 +283,13 @@ def main() -> None:
     parser.add_argument("--processed", type=Path, default=Path("data/processed"))
     parser.add_argument("--cache", type=Path, default=Path("data/progress-cache"))
     parser.add_argument("--output", type=Path, default=Path("data/risk-comparison"))
+    parser.add_argument("--tuning-report", type=Path, help="metrics.json from grouped Optuna search")
     args = parser.parse_args()
-    report = run(args.dataset, args.processed, args.cache, args.output)
+    config = CompareConfig()
+    if args.tuning_report:
+        tuned = json.loads(args.tuning_report.read_text(encoding="utf-8"))["best_params"]
+        config = replace(config, tuned_lightgbm=tuned)
+    report = run(args.dataset, args.processed, args.cache, args.output, config)
     print(json.dumps({"comparison": report["comparison"], "selected": report["selected_by_oof_ap"],
                       "test": report["test"]}, ensure_ascii=False, indent=2))
 

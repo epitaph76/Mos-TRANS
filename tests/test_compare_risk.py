@@ -45,6 +45,16 @@ class RiskComparisonTests(unittest.TestCase):
                 predict(model_path, train.iloc[:1].assign(time_fact_begin="2026-01-01"))
         np.testing.assert_array_equal(before, after)
 
+    def test_ordered_catboost_predicts_without_vehicle_id(self):
+        path = Path(__file__).resolve().parents[1] / "data/processed/train_features.parquet"
+        if not path.is_file():
+            self.skipTest("Local dataset absent")
+        train = pd.read_parquet(path).iloc[:200].copy()
+        artifact = _fit_model("catboost_ordered_no_vehicle_id", train,
+                              CompareConfig(catboost_trees=5, threads=1))
+        probability = _predict_fitted(artifact, train.iloc[:10].drop(columns="tr_id"))
+        self.assertEqual(len(probability), 10)
+
 
 if __name__ == "__main__":
     unittest.main()

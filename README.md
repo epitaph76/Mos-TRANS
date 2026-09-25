@@ -78,7 +78,7 @@ F1 0,619, precision 0,632, recall 0,606, ROC AUC 0,879 и AP 0,729.
 ## Сравнение CatBoost, LightGBM и движения по маршруту
 
 [Ноутбук Colab](https://colab.research.google.com/github/epitaph76/Mos-TRANS/blob/ya-dolbayob/notebooks/compare_risk_colab.ipynb)
-сравнивает шесть вариантов и ансамбль для вероятности задержки строго больше
+сравнивает CatBoost, LightGBM, квантильный прогноз, Optuna-вариант и ансамбль для вероятности задержки строго больше
 150 секунд. Для каждого из 13 исходных ТС он обучает модели без этого ТС и
 его синтетических копий, а метрики считает только на реальных точках. Главная
 метрика выбора — average precision (AP); порог для F1 выбирается на тех же
@@ -113,5 +113,35 @@ out-of-fold прогнозах, поэтому такой F1 несколько 
 AP 0,759. Разница AP на отложенных ТС мала относительно разброса между ТС;
 при повторной выборке групп 95%-й интервал разницы составляет примерно
 −0,008…0,040.
+
+### История отклонения, Optuna и Ordered CatBoost
+
+Дополнительный эксперимент проверяет только прошлые значения `cur_dev_s` того
+же ТС: изменение за предыдущие 5 и 10 минут. На 13 группах LightGBM без
+`tr_id` остаётся лучше: AP 0,571; с полной историей AP 0,564, только с
+изменением за 5 минут 0,558, за 10 минут 0,562. Для применения истории в
+потоке нужно хранить предыдущие наблюдения `cur_dev_s`. Будущие точки и
+фактическое время прибытия не используются.
+
+Optuna выполняет 25 проб на 10 семействах ТС с внутренними групповыми фолдами;
+три семейства не участвуют в подборе. На них AP вырос с 0,445 до 0,476, но
+после проверки всех 13 семейств подобранный вариант получил AP 0,546 против
+0,571 у текущего LightGBM. Порог 0,20, выбранный на внутренних фолдах,
+повысил F1 на этих трёх семействах с 0,361 до 0,451 для базовой модели;
+на всех 13 семействах порог 0,30 лучше (F1 0,555 против 0,510). CatBoost
+`Ordered` получил AP 0,544 против 0,528 у CatBoost `Plain`, но LightGBM
+остался лидером. Итоговая модель и test-прогноз не заменены.
+
+Запустить эти эксперименты локально:
+
+```powershell
+.\.venv\Scripts\python.exe -m mos_trans.modeling.history_risk --dataset data/dataset.zip --processed data/processed --output data/risk-history
+.\.venv\Scripts\python.exe -m mos_trans.modeling.tune_risk --dataset data/dataset.zip --processed data/processed --output data/risk-tuning --trials 25
+.\.venv\Scripts\python.exe -m mos_trans.modeling.compare_risk --dataset data/dataset.zip --processed data/processed --cache data/progress-cache --output data/risk-comparison --tuning-report data/risk-tuning/metrics.json
+```
+
+Проверенные таблицы и параметры сохранены в `artifacts/risk_history/`,
+`artifacts/risk_tuning/` и `artifacts/risk_comparison/`. Ноутбук Colab запускает
+их в том же порядке.
 
 Вместо `data/dataset.zip` можно указать распакованную папку с `train/`, `test/`, `validate/` и `labels/`. Ядро создаёт очищенный `traffic_clean.parquet` и таблицы `train/test/validate_samples.parquet` и `train/test/validate_features.parquet` в папке `data/processed/`, исключённой из Git. Формат и определения всех полей описаны в [FEATURES.md](FEATURES.md). Модельные ветки используют эти выходы и не чистят исходные CSV независимо друг от друга.

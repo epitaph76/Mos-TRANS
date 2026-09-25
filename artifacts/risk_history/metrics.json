@@ -1,0 +1,26 @@
+{
+  "n_real": 1141,
+  "scores": {
+    "baseline": {
+      "ap": 0.5706565474950595,
+      "f1": 0.5545722713864307,
+      "oof_selected_threshold": 0.3
+    },
+    "all_history": {
+      "ap": 0.5635034393896327,
+      "f1": 0.5495750708215298,
+      "oof_selected_threshold": 0.275
+    },
+    "change_5m": {
+      "ap": 0.5576606247240719,
+      "f1": 0.5493827160493827,
+      "oof_selected_threshold": 0.35
+    },
+    "change_10m": {
+      "ap": 0.562056372679907,
+      "f1": 0.547112462006079,
+      "oof_selected_threshold": 0.325
+    }
+  },
+  "note": "Lags are computed from prior sample points within train. Production use needs a stream of prior cur_dev_s observations."
+}
