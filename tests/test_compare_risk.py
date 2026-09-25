@@ -34,8 +34,9 @@ class RiskComparisonTests(unittest.TestCase):
             self.skipTest("Local dataset absent")
         train = pd.read_parquet(path).iloc[:200].copy()
         config = CompareConfig(lightgbm_trees=5, threads=1)
-        artifact = _fit_model("lightgbm_base", train, config)
+        artifact = _fit_model("lightgbm_no_vehicle_id", train, config)
         before = _predict_fitted(artifact, train.iloc[:10])
+        np.testing.assert_array_equal(before, _predict_fitted(artifact, train.iloc[:10].drop(columns="tr_id")))
         with tempfile.TemporaryDirectory() as directory:
             model_path = Path(directory) / "risk.joblib"
             joblib.dump(artifact, model_path)

@@ -21,7 +21,8 @@ from mos_trans.preprocessing import build_dataset
 
 
 QUANTILES = (0.1, 0.5, 0.9)
-CANDIDATES = ("catboost_base", "catboost_progress", "lightgbm_base", "lightgbm_progress", "lightgbm_quantiles")
+CANDIDATES = ("catboost_base", "catboost_progress", "lightgbm_base", "lightgbm_no_vehicle_id",
+              "lightgbm_progress", "lightgbm_quantiles")
 
 
 @dataclass(frozen=True)
@@ -58,6 +59,8 @@ def _lightgbm_frames(fit: pd.DataFrame, other: pd.DataFrame, columns: list[str])
     """Learn categorical vocabularies on fit only; unseen categories become missing."""
     fit_x, other_x = fit.loc[:, columns].copy(), other.loc[:, columns].copy()
     for name in ("tr_id", *CATEGORICAL):
+        if name not in columns:
+            continue
         categories = pd.Index(fit_x[name].astype(str).unique())
         fit_x[name] = pd.Categorical(fit_x[name].astype(str), categories=categories)
         other_values = other_x[name].astype(str)
@@ -101,6 +104,27 @@ def _threshold(oof: pd.DataFrame, column: str) -> tuple[float, float]:
     return float(thresholds[best]), float(scores[best])
 
 
+def _vehicle_bootstrap_delta(oof: pd.DataFrame, base: str, alternative: str,
+                             seed: int, repetitions: int = 1000) -> dict:
+    """Paired vehicle-family bootstrap for the change in average precision."""
+    actual = oof.actual_class.to_numpy(int)
+    before = oof[base].to_numpy(float)
+    after = oof[alternative].to_numpy(float)
+    ids = oof.tr_id.to_numpy(str)
+    groups = [np.flatnonzero(ids == vehicle) for vehicle in sorted(set(ids))]
+    rng = np.random.default_rng(seed)
+    deltas = []
+    for _ in range(repetitions):
+        indices = np.concatenate([groups[index] for index in rng.integers(len(groups), size=len(groups))])
+        if actual[indices].any():
+            deltas.append(average_precision_score(actual[indices], after[indices])
+                          - average_precision_score(actual[indices], before[indices]))
+    lower, upper = np.quantile(deltas, [0.025, 0.975])
+    return {"ap_delta": float(average_precision_score(actual, after) - average_precision_score(actual, before)),
+            "cluster_bootstrap_95_percent": [float(lower), float(upper)],
+            "bootstrap_repetitions": repetitions}
+
+
 def _fit_predict(name: str, fit: pd.DataFrame, other: pd.DataFrame,
                  config: CompareConfig) -> np.ndarray:
     return _predict_fitted(_fit_model(name, fit, config), other)
@@ -110,7 +134,8 @@ def _fit_model(name: str, fit: pd.DataFrame, config: CompareConfig) -> dict:
     if name == "catboost_lightgbm_blend":
         return {"name": name, "members": [_fit_model("catboost_progress", fit, config),
                                            _fit_model("lightgbm_progress", fit, config)]}
-    columns = list(BASE_FEATURES) + (list(PROGRESS_FEATURES) if name.endswith("progress") or name == "lightgbm_quantiles" else [])
+    columns = [column for column in BASE_FEATURES if name != "lightgbm_no_vehicle_id" or column != "tr_id"]
+    columns += list(PROGRESS_FEATURES) if name.endswith("progress") or name == "lightgbm_quantiles" else []
     if name.startswith("catboost"):
         # Same numeric vehicle-ID treatment and feature order as the current classifier.
         fit_x = model_input(fit, list(BASE_FEATURES))
@@ -120,17 +145,18 @@ def _fit_model(name: str, fit: pd.DataFrame, config: CompareConfig) -> dict:
         model.fit(fit_x, labels(fit.target_delay_s), cat_features=list(CATEGORICAL))
         return {"name": name, "model": model}
     fit_x, _ = _lightgbm_frames(fit, fit, columns)
-    categories = {column: list(fit_x[column].cat.categories) for column in ("tr_id", *CATEGORICAL)}
+    categories = {column: list(fit_x[column].cat.categories)
+                  for column in ("tr_id", *CATEGORICAL) if column in columns}
     if name == "lightgbm_quantiles":
         residual = (fit.target_delay_s - fit.cur_dev_s).to_numpy(float)
         models = []
         for alpha in QUANTILES:
             model = _lightgbm(config, quantile=alpha)
-            model.fit(fit_x, residual, categorical_feature=["tr_id", *CATEGORICAL])
+            model.fit(fit_x, residual, categorical_feature=list(categories))
             models.append(model)
         return {"name": name, "models": models, "categories": categories}
     model = _lightgbm(config)
-    model.fit(fit_x, labels(fit.target_delay_s), categorical_feature=["tr_id", *CATEGORICAL])
+    model.fit(fit_x, labels(fit.target_delay_s), categorical_feature=list(categories))
     return {"name": name, "model": model, "categories": categories}
 
 
@@ -145,7 +171,8 @@ def _predict_fitted(artifact: dict, frame: pd.DataFrame) -> np.ndarray:
         if name.endswith("progress"):
             matrix = pd.concat([matrix, frame.loc[:, list(PROGRESS_FEATURES)]], axis=1)
         return artifact["model"].predict_proba(matrix)[:, 1]
-    columns = list(BASE_FEATURES) + (list(PROGRESS_FEATURES) if name.endswith("progress") or name == "lightgbm_quantiles" else [])
+    columns = [column for column in BASE_FEATURES if name != "lightgbm_no_vehicle_id" or column != "tr_id"]
+    columns += list(PROGRESS_FEATURES) if name.endswith("progress") or name == "lightgbm_quantiles" else []
     matrix = frame.loc[:, columns].copy()
     for column, categories in artifact["categories"].items():
         values = matrix[column].astype(str)
@@ -202,6 +229,7 @@ def run(dataset_zip: str | Path, processed_dir: str | Path, cache_dir: str | Pat
     by_family = {str(vehicle): _score(group.actual_class.to_numpy(int),
                                       group[chosen].to_numpy(float), chosen_threshold)
                  for vehicle, group in oof.groupby("tr_id", sort=True)}
+    id_ablation = _vehicle_bootstrap_delta(oof, "lightgbm_base", "lightgbm_no_vehicle_id", config.seed)
     output_dir.mkdir(parents=True, exist_ok=True)
     oof.to_csv(output_dir / "oof_predictions.csv", index=False, lineterminator="\n")
     test_report = None
@@ -224,7 +252,8 @@ def run(dataset_zip: str | Path, processed_dir: str | Path, cache_dir: str | Pat
         dataset_hash = hashlib.file_digest(stream, "sha256").hexdigest()
     report = {"dataset_sha256": dataset_hash, "config": asdict(config), "features": list(PROGRESS_FEATURES),
               "families": real_ids, "oof_n_real": int(len(oof)), "comparison": comparison,
-              "selected_by_oof_ap": chosen, "oof_by_family": by_family, "test": test_report,
+              "selected_by_oof_ap": chosen, "oof_by_family": by_family,
+              "lightgbm_vehicle_id_ablation": id_ablation, "test": test_report,
               "limits": "One day and 13 original trajectories; OOF model selection/threshold tuning make selected OOF F1 optimistic. Published test shares day and vehicles with train."}
     (output_dir / "metrics.json").write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
     return report
