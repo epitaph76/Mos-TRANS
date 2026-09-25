@@ -18,3 +18,16 @@
 Требуются две версии: CSV-файл в разделе **Data Science** и заполненная форма в разделе **«Загрузка решения»**. Дедлайн обоих разделов — **27 сентября, 23:59 МСК**. В Data Science учитывается лучший результат, в форме — последняя сохранённая версия. Лимит: 36 попыток в день, из них не более 24 успешных.
 
 Рекомендуемый стек: Python 3.12+, PyTorch, CatBoost, Docker; документация API — OpenAPI/Swagger.
+
+## Общее ядро предобработки
+
+На Windows из корня репозитория:
+
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements-preprocessing.txt
+.\.venv\Scripts\python.exe -m mos_trans.preprocessing --input data/dataset.zip --output data/processed
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+```
+
+Вместо `data/dataset.zip` можно указать распакованную папку с `train/`, `test/`, `validate/` и `labels/`. Ядро создаёт очищенный `traffic_clean.parquet` и таблицы `train/test/validate_samples.parquet` и `train/test/validate_features.parquet` в папке `data/processed/`, исключённой из Git. Формат и определения всех полей описаны в [FEATURES.md](FEATURES.md). Модельные ветки используют эти выходы и не чистят исходные CSV независимо друг от друга.
