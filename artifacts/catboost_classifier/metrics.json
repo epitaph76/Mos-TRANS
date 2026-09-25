@@ -1,0 +1,251 @@
+{
+  "dataset_sha256": "fce28b4121dbaae793eee855b8efa523484c91ac203d782ff33853884c527760",
+  "config": {
+    "iterations": 1500,
+    "learning_rate": 0.03,
+    "depth": 6,
+    "l2_leaf_reg": 8.0,
+    "patience": 100,
+    "thread_count": 4
+  },
+  "boundaries_s": [
+    -60.0,
+    60.0,
+    300.0
+  ],
+  "class_names": [
+    "early",
+    "on_time",
+    "late",
+    "very_late"
+  ],
+  "features": [
+    "tr_id",
+    "target_stop_id",
+    "cur_dev_s",
+    "realtime_data_age_s",
+    "realtime_speed_last",
+    "realtime_speed_age_s",
+    "realtime_gps_age_s",
+    "realtime_distance_to_target_m",
+    "realtime_packet_count_2m",
+    "realtime_speed_count_2m",
+    "realtime_speed_mean_2m",
+    "realtime_speed_std_2m",
+    "realtime_stopped_fraction_2m",
+    "realtime_packet_count_5m",
+    "realtime_speed_count_5m",
+    "realtime_speed_mean_5m",
+    "realtime_speed_std_5m",
+    "realtime_stopped_fraction_5m",
+    "realtime_packet_count_10m",
+    "realtime_speed_count_10m",
+    "realtime_speed_mean_10m",
+    "realtime_speed_std_10m",
+    "realtime_stopped_fraction_10m",
+    "context_vehicle_count_500m",
+    "context_speed_count_500m",
+    "context_speed_mean_500m",
+    "context_speed_median_500m",
+    "context_stopped_fraction_500m",
+    "schedule_horizon_s",
+    "schedule_target_lon",
+    "schedule_target_lat",
+    "schedule_target_address",
+    "schedule_stops_remaining",
+    "historical_hour",
+    "historical_day_of_week",
+    "historical_time_sin",
+    "historical_time_cos"
+  ],
+  "categorical": [
+    "target_stop_id",
+    "schedule_target_address"
+  ],
+  "holdout": [
+    {
+      "n": 363,
+      "accuracy": 0.5206611570247934,
+      "balanced_accuracy": 0.33406221944119485,
+      "macro_f1": 0.3325838769804287,
+      "log_loss": 0.9979068557484372,
+      "confusion_matrix": [
+        [
+          0,
+          48,
+          5,
+          0
+        ],
+        [
+          0,
+          137,
+          41,
+          0
+        ],
+        [
+          0,
+          68,
+          50,
+          0
+        ],
+        [
+          0,
+          4,
+          8,
+          2
+        ]
+      ],
+      "class_counts": [
+        53,
+        178,
+        118,
+        14
+      ],
+      "seed": 42,
+      "held_out_vehicles": [
+        "122048",
+        "133300",
+        "133957"
+      ],
+      "trees": 227,
+      "n_train": 3053
+    },
+    {
+      "n": 313,
+      "accuracy": 0.4536741214057508,
+      "balanced_accuracy": 0.296549245147376,
+      "macro_f1": 0.2398842854127609,
+      "log_loss": 1.122331504365632,
+      "confusion_matrix": [
+        [
+          0,
+          21,
+          0,
+          0
+        ],
+        [
+          0,
+          94,
+          13,
+          0
+        ],
+        [
+          0,
+          108,
+          48,
+          0
+        ],
+        [
+          0,
+          7,
+          22,
+          0
+        ]
+      ],
+      "class_counts": [
+        21,
+        107,
+        156,
+        29
+      ],
+      "seed": 7,
+      "held_out_vehicles": [
+        "132430",
+        "133300",
+        "134040"
+      ],
+      "trees": 194,
+      "n_train": 3192
+    },
+    {
+      "n": 374,
+      "accuracy": 0.48128342245989303,
+      "balanced_accuracy": 0.3465108012521806,
+      "macro_f1": 0.3446963470319635,
+      "log_loss": 1.051129298661042,
+      "confusion_matrix": [
+        [
+          0,
+          36,
+          5,
+          0
+        ],
+        [
+          0,
+          103,
+          43,
+          2
+        ],
+        [
+          0,
+          84,
+          70,
+          2
+        ],
+        [
+          0,
+          4,
+          18,
+          7
+        ]
+      ],
+      "class_counts": [
+        41,
+        148,
+        156,
+        29
+      ],
+      "seed": 123,
+      "held_out_vehicles": [
+        "122048",
+        "132430",
+        "133300"
+      ],
+      "trees": 260,
+      "n_train": 3031
+    }
+  ],
+  "holdout_macro_f1_mean": 0.3057215031417177,
+  "selected_trees": 227,
+  "test": {
+    "n": 353,
+    "accuracy": 0.6147308781869688,
+    "balanced_accuracy": 0.4916910656307978,
+    "macro_f1": 0.5203717323411996,
+    "log_loss": 0.8487056967884263,
+    "confusion_matrix": [
+      [
+        24,
+        22,
+        3,
+        0
+      ],
+      [
+        7,
+        109,
+        38,
+        0
+      ],
+      [
+        2,
+        44,
+        81,
+        1
+      ],
+      [
+        0,
+        2,
+        17,
+        3
+      ]
+    ],
+    "class_counts": [
+      49,
+      154,
+      128,
+      22
+    ]
+  },
+  "selection": "Trees selected from real-vehicle family holdouts; test labels only used for final report.",
+  "limits": "Published test shares vehicles and day with train; classifier probabilities are not seconds of delay."
+}

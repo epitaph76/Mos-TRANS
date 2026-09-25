@@ -36,4 +36,39 @@ py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements-catboost.txt
 ```
 
+## CatBoostClassifier: риск задержки
+
+Классификатор предсказывает четыре класса фактического отклонения `target_delay_s`:
+`early` (< −60 с), `on_time` (от −60 до 60 с), `late` (от 60 до 300 с),
+`very_late` (от 300 с). Граница относится к следующему классу. Модель выдаёт
+вероятности всех классов; это не прогноз задержки в секундах и его нельзя
+сравнивать с MAE регрессора.
+
+В [ноутбуке для Colab](https://colab.research.google.com/github/epitaph76/Mos-TRANS/blob/ya-dolbayob/notebooks/train_catboost_classifier_colab.ipynb)
+укажите путь к `dataset.zip` и папке результатов на Drive и запустите ячейки сверху вниз.
+Архив копируется в `/content`, затем выполняется общая предобработка. Три
+групповых holdout отделяют исходные ТС вместе с их синтетическими копиями;
+число деревьев выбирается по реальным точкам holdout. Публикуемый test нужен
+только для итоговых метрик. Сохраняются модель, вероятности для test и validate,
+метрики, таблица holdout-прогнозов и важности признаков.
+Результат проверенного локального запуска также находится в
+`artifacts/catboost_classifier/`.
+
+Локальный запуск после установки зависимостей:
+
+```powershell
+.\.venv\Scripts\python.exe -m mos_trans.modeling.classifier --input data/processed --dataset data/dataset.zip --output data/catboost-classifier
+```
+
+Для инференса из Python используйте
+`mos_trans.modeling.classifier.predict(model_path, metrics_path, features)`.
+На вход подаются признаки общей предобработки без фактических времён расписания.
+Опубликованный test содержит те же ТС и день, поэтому главным показателем
+переноса на другие ТС служит групповой holdout.
+
+Локальный запуск: средний macro F1 по трём групповым holdout — **0,306**;
+на опубликованном test — **0,520** (accuracy 0,615). Простая модель,
+всегда предсказывающая `on_time`, имеет на test macro F1 0,152.
+Разница между holdout и test подчёркивает ограниченность test для новых ТС.
+
 Вместо `data/dataset.zip` можно указать распакованную папку с `train/`, `test/`, `validate/` и `labels/`. Ядро создаёт очищенный `traffic_clean.parquet` и таблицы `train/test/validate_samples.parquet` и `train/test/validate_features.parquet` в папке `data/processed/`, исключённой из Git. Формат и определения всех полей описаны в [FEATURES.md](FEATURES.md). Модельные ветки используют эти выходы и не чистят исходные CSV независимо друг от друга.
