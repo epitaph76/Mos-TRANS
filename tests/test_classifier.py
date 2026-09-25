@@ -1,4 +1,3 @@
-import io
 import json
 import tempfile
 import unittest
@@ -16,9 +15,9 @@ from mos_trans.modeling.classifier import (
 
 class ClassifierTests(unittest.TestCase):
     def test_boundaries(self):
-        actual = labels([-61, -60, 0, 59.99, 60, 299.99, 300])
-        np.testing.assert_array_equal(actual, [0, 1, 1, 1, 2, 2, 3])
-        self.assertEqual(len(CLASS_NAMES), 4)
+        actual = labels([-61, 0, 149.99, 150, 150.01, 300])
+        np.testing.assert_array_equal(actual, [0, 0, 0, 0, 1, 1])
+        self.assertEqual(len(CLASS_NAMES), 2)
 
     def test_future_column_rejected(self):
         frame = pd.DataFrame({"sample_id": ["a"], "tr_id": ["1"], "cur_dev_s": [0],
@@ -59,15 +58,16 @@ class ClassifierTests(unittest.TestCase):
         frame["cur_dev_s"] = list(range(16))
         columns = feature_columns(frame)
         model = _model(Config(iterations=5), 5, 42)
-        model.fit(model_input(frame, columns), np.arange(16) % 4, cat_features=list(CATEGORICAL))
-        expected = model.predict_proba(model_input(frame, columns))
+        model.fit(model_input(frame, columns), np.arange(16) % 2, cat_features=list(CATEGORICAL))
+        expected = model.predict_proba(model_input(frame, columns))[:, 1]
         with tempfile.TemporaryDirectory() as directory:
             model_path = Path(directory) / "model.cbm"
             metadata_path = Path(directory) / "metrics.json"
             model.save_model(str(model_path))
-            metadata_path.write_text(json.dumps({"features": columns}), encoding="utf-8")
+            metadata_path.write_text(json.dumps({"features": columns, "decision_threshold": 0.2}), encoding="utf-8")
             actual = predict(model_path, metadata_path, frame)
-        np.testing.assert_allclose(actual[[f"p_{name}" for name in CLASS_NAMES]].to_numpy(), expected)
+        np.testing.assert_allclose(actual["probability_delay_over_150s"].to_numpy(), expected)
+        np.testing.assert_array_equal(actual["predicted_class"].to_numpy(), expected >= 0.2)
 
 
 if __name__ == "__main__":

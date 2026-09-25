@@ -1,4 +1,4 @@
-"""Four-class delay risk model using only information available at prediction time."""
+"""Predict whether the target-stop delay exceeds 150 seconds."""
 
 from __future__ import annotations
 
@@ -14,11 +14,15 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from catboost import CatBoostClassifier
-from sklearn.metrics import accuracy_score, balanced_accuracy_score, confusion_matrix, f1_score, log_loss
+from sklearn.metrics import (
+    accuracy_score, average_precision_score, balanced_accuracy_score,
+    confusion_matrix, f1_score, log_loss, precision_score, recall_score,
+    roc_auc_score,
+)
 
 
-BOUNDARIES = (-60.0, 60.0, 300.0)
-CLASS_NAMES = ("early", "on_time", "late", "very_late")
+DELAY_THRESHOLD_S = 150.0
+CLASS_NAMES = ("not_over_150s", "over_150s")
 SEEDS = (42, 7, 123)
 EXCLUDED = frozenset({"sample_id", "T", "target_time_begin", "target_delay_s", "target_delta_s", "target_class", "time_fact_begin"})
 CATEGORICAL = ("target_stop_id", "schedule_target_address")
@@ -55,8 +59,7 @@ def labels(delay_s: pd.Series | np.ndarray) -> np.ndarray:
     values = np.asarray(delay_s, dtype=float)
     if not np.isfinite(values).all():
         raise ValueError("Classification labels require known finite delays")
-    # [-inf,-60), [-60,60), [60,300), [300,inf)
-    return np.searchsorted(BOUNDARIES, values, side="right").astype(np.int64)
+    return (values > DELAY_THRESHOLD_S).astype(np.int64)
 
 
 def feature_columns(frame: pd.DataFrame) -> list[str]:
@@ -130,23 +133,28 @@ def family_split(frame: pd.DataFrame, families: dict[str, str], seed: int) -> tu
 
 
 def _model(config: Config, iterations: int, seed: int) -> CatBoostClassifier:
-    return CatBoostClassifier(loss_function="MultiClass", eval_metric="MultiClass",
+    return CatBoostClassifier(loss_function="Logloss", eval_metric="Logloss",
                               iterations=iterations, learning_rate=config.learning_rate,
                               depth=config.depth, l2_leaf_reg=config.l2_leaf_reg,
                               random_seed=seed, thread_count=config.thread_count,
                               allow_writing_files=False, verbose=False)
 
 
-def _metrics(actual: np.ndarray, probabilities: np.ndarray) -> dict:
-    predicted = probabilities.argmax(axis=1)
+def _metrics(actual: np.ndarray, probabilities: np.ndarray, threshold: float = 0.5) -> dict:
+    positive = probabilities[:, 1]
+    predicted = (positive >= threshold).astype(np.int64)
     return {
         "n": int(len(actual)),
         "accuracy": float(accuracy_score(actual, predicted)),
         "balanced_accuracy": float(balanced_accuracy_score(actual, predicted)),
-        "macro_f1": float(f1_score(actual, predicted, labels=range(4), average="macro", zero_division=0)),
-        "log_loss": float(log_loss(actual, probabilities, labels=range(4))),
-        "confusion_matrix": confusion_matrix(actual, predicted, labels=range(4)).tolist(),
-        "class_counts": np.bincount(actual, minlength=4).tolist(),
+        "f1": float(f1_score(actual, predicted, zero_division=0)),
+        "precision": float(precision_score(actual, predicted, zero_division=0)),
+        "recall": float(recall_score(actual, predicted, zero_division=0)),
+        "roc_auc": float(roc_auc_score(actual, positive)) if len(np.unique(actual)) == 2 else None,
+        "average_precision": float(average_precision_score(actual, positive)) if actual.any() else None,
+        "log_loss": float(log_loss(actual, probabilities, labels=[0, 1])),
+        "confusion_matrix": confusion_matrix(actual, predicted, labels=[0, 1]).tolist(),
+        "class_counts": np.bincount(actual, minlength=2).tolist(),
     }
 
 
@@ -155,12 +163,11 @@ def predict(model_path: str | Path, metadata_path: str | Path, frame: pd.DataFra
     model = CatBoostClassifier()
     model.load_model(str(model_path))
     probabilities = model.predict_proba(model_input(frame, metadata["features"]))
-    predicted = probabilities.argmax(axis=1)
-    result = pd.DataFrame({"sample_id": frame.sample_id.astype(str).to_numpy(), "predicted_class": predicted,
-                           "predicted_label": [CLASS_NAMES[i] for i in predicted]})
-    for i, name in enumerate(CLASS_NAMES):
-        result[f"p_{name}"] = probabilities[:, i]
-    return result
+    positive = probabilities[:, 1]
+    predicted = (positive >= float(metadata.get("decision_threshold", 0.5))).astype(np.int64)
+    return pd.DataFrame({"sample_id": frame.sample_id.astype(str).to_numpy(),
+                         "predicted_class": predicted,
+                         "probability_delay_over_150s": positive})
 
 
 def run(input_dir: str | Path, dataset_zip: str | Path, output_dir: str | Path,
@@ -177,6 +184,7 @@ def run(input_dir: str | Path, dataset_zip: str | Path, output_dir: str | Path,
     families = family_map(dataset_zip, {str(x) for x in train.tr_id if not str(x).startswith("900")})
     folds = []
     oof = []
+    fold_probabilities = []
     for seed in SEEDS:
         fit_idx, val_idx, held = family_split(train, families, seed)
         model = _model(config, config.iterations, seed)
@@ -184,6 +192,7 @@ def run(input_dir: str | Path, dataset_zip: str | Path, output_dir: str | Path,
                   eval_set=(x_train.iloc[val_idx], y_train[val_idx]),
                   early_stopping_rounds=config.patience, use_best_model=True)
         probability = model.predict_proba(x_train.iloc[val_idx])
+        fold_probabilities.append((y_train[val_idx], probability))
         fold_metrics = _metrics(y_train[val_idx], probability)
         fold_metrics.update({"seed": seed, "held_out_vehicles": held,
                              "trees": int(model.tree_count_), "n_train": int(len(fit_idx))})
@@ -191,26 +200,37 @@ def run(input_dir: str | Path, dataset_zip: str | Path, output_dir: str | Path,
         fold_rows = pd.DataFrame({"sample_id": train.sample_id.iloc[val_idx].astype(str).to_numpy(),
                                   "tr_id": train.tr_id.iloc[val_idx].astype(str).to_numpy(),
                                   "seed": seed, "actual_class": y_train[val_idx]})
-        for i, name in enumerate(CLASS_NAMES):
-            fold_rows[f"p_{name}"] = probability[:, i]
+        fold_rows["probability_delay_over_150s"] = probability[:, 1]
         oof.append(fold_rows)
-        print(f"seed={seed}: holdout macro F1={fold_metrics['macro_f1']:.3f}, trees={model.tree_count_}", flush=True)
+        print(f"seed={seed}: holdout AP={fold_metrics['average_precision']:.3f}, "
+              f"trees={model.tree_count_}", flush=True)
+    thresholds = np.round(np.arange(0.10, 0.901, 0.05), 2)
+    threshold_scores = [np.mean([f1_score(actual, probability[:, 1] >= threshold, zero_division=0)
+                                 for actual, probability in fold_probabilities]) for threshold in thresholds]
+    decision_threshold = float(thresholds[int(np.argmax(threshold_scores))])
+    for fold, (actual, probability), rows in zip(folds, fold_probabilities, oof):
+        fold.update(_metrics(actual, probability, decision_threshold))
+        rows["predicted_class"] = (rows["probability_delay_over_150s"] >= decision_threshold).astype(int)
+    print(f"Decision threshold={decision_threshold:.2f}, mean holdout F1={max(threshold_scores):.3f}", flush=True)
     chosen_trees = int(np.median([fold["trees"] for fold in folds]))
     final = _model(config, chosen_trees, SEEDS[0])
     final.fit(x_train, y_train, cat_features=list(CATEGORICAL))
     output_dir.mkdir(parents=True, exist_ok=True)
     model_path = output_dir / "catboost_classifier.cbm"
     final.save_model(str(model_path))
-    (output_dir / "holdout_predictions.csv").write_text(
-        pd.concat(oof).to_csv(index=False, lineterminator="\n"), encoding="utf-8")
+    (output_dir / "holdout_predictions.csv").write_bytes(
+        pd.concat(oof).to_csv(index=False, lineterminator="\n").encode("utf-8"))
     digest = hashlib.sha256(dataset_zip.read_bytes()).hexdigest()
     test_probabilities = final.predict_proba(x_test)
     report = {
-        "dataset_sha256": digest, "config": asdict(config), "boundaries_s": list(BOUNDARIES),
+        "dataset_sha256": digest, "config": asdict(config), "delay_threshold_s": DELAY_THRESHOLD_S,
+        "positive_definition": "target_delay_s > 150",
+        "decision_threshold": decision_threshold,
         "class_names": list(CLASS_NAMES), "features": columns, "categorical": list(CATEGORICAL),
-        "holdout": folds, "holdout_macro_f1_mean": float(np.mean([fold["macro_f1"] for fold in folds])),
-        "selected_trees": chosen_trees, "test": _metrics(y_test, test_probabilities),
-        "selection": "Trees selected from real-vehicle family holdouts; test labels only used for final report.",
+        "holdout": folds, "holdout_f1_mean": float(np.mean([fold["f1"] for fold in folds])),
+        "holdout_average_precision_mean": float(np.mean([fold["average_precision"] for fold in folds])),
+        "selected_trees": chosen_trees, "test": _metrics(y_test, test_probabilities, decision_threshold),
+        "selection": "Trees and decision threshold selected from real-vehicle family holdouts; test labels only used for final report.",
         "limits": "Published test shares vehicles and day with train; classifier probabilities are not seconds of delay.",
     }
     metadata_path = output_dir / "metrics.json"
@@ -232,7 +252,7 @@ def main() -> None:
     parser.add_argument("--output", type=Path, default=Path("artifacts/catboost_classifier"))
     args = parser.parse_args()
     report = run(args.input, args.dataset, args.output)
-    print(json.dumps({"holdout_macro_f1_mean": report["holdout_macro_f1_mean"],
+    print(json.dumps({"holdout_f1_mean": report["holdout_f1_mean"],
                       "test": report["test"]}, ensure_ascii=False, indent=2))
 
 
