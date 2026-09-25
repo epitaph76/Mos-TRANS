@@ -11,6 +11,16 @@
     "schedule_target_address"
   ],
   "best_iteration": 2427,
+  "selected_trees": 2428,
+  "local_test_model_training_splits": [
+    "train"
+  ],
+  "final_model_training_splits": [
+    "train",
+    "test"
+  ],
+  "final_model_training_rows": 4787,
+  "test_metric_note": "Test was used for early stopping, so its MAE is a tuning metric, not an unbiased final estimate.",
   "baselines": {
     "median_train_delta": {
       "median_delta_s": 0.0,

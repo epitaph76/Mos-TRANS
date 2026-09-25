@@ -1,6 +1,7 @@
 from pathlib import Path
 import argparse
 import json
+import zipfile
 
 import numpy as np
 import pandas as pd
@@ -19,6 +20,8 @@ EXCLUDED_COLUMNS = {
     "target_time_begin",
     "target_delay_s",
     "target_delta_s",
+    "target_class",
+    "time_fact_begin",
 }
 
 CATEGORICAL_COLUMNS = [
@@ -40,6 +43,8 @@ def add_residual_target(frame: pd.DataFrame) -> pd.DataFrame:
     return frame
 
 def select_feature_columns(frame: pd.DataFrame) -> list[str]:
+    if "time_fact_begin" in frame or "target_class" in frame:
+        raise ValueError("Factual arrival time or target class cannot be a feature")
     return [column for column in frame.columns
             if column not in EXCLUDED_COLUMNS]
 
@@ -57,17 +62,17 @@ def median_delta_baseline(train: pd.DataFrame, test: pd.DataFrame) -> dict:
         "rmse": float(np.sqrt(mean_squared_error(test[TARGET_COLUMN], prediction))),
     }
 
-def create_model() -> CatBoostRegressor:
+def create_model(iterations: int = 3000, verbose: int | bool = 100) -> CatBoostRegressor:
     return CatBoostRegressor(
         loss_function="MAE",
         eval_metric="MAE",
-        iterations=3000,
+        iterations=iterations,
         learning_rate=0.03,
         depth=7,
         l2_leaf_reg=8.0,
         random_seed=42,
         allow_writing_files=False,
-        verbose=100,
+        verbose=verbose,
     )
 
 def train_model(train: pd.DataFrame, test: pd.DataFrame,
@@ -116,10 +121,13 @@ def save_feature_importance(model:CatBoostRegressor, feature_columns:list[str],
     importance.to_csv(output_dir / "feature_importance.csv", index=False)
 
 
-def run(input_dir: Path, output_dir: Path):
+def run(input_dir: Path, output_dir: Path, dataset_zip: Path | None = None):
     output_dir.mkdir(parents=True, exist_ok=True)
 
     train, test, validate = load_datasets(input_dir)
+    if (not train[TARGET_COLUMN].notna().all() or not test[TARGET_COLUMN].notna().all()
+            or validate[TARGET_COLUMN].notna().any()):
+        raise ValueError("Expected labeled train/test and unlabeled validate")
 
     train = add_residual_target(train)
     test = add_residual_target(test)
@@ -137,6 +145,8 @@ def run(input_dir: Path, output_dir: Path):
     baseline_median = median_delta_baseline(train, test)
 
     model = train_model(train, test, feature_columns, categorical_columns)
+    selection_model_path = output_dir / "catboost_residual_local_test.cbm"
+    model.save_model(str(selection_model_path))
 
     test_delta_prediction, test_delay_prediction = (
         predict_final_delay(
@@ -153,6 +163,16 @@ def run(input_dir: Path, output_dir: Path):
         predicted_delta=test_delta_prediction,
     )
 
+    best_iteration = model.get_best_iteration()
+    selected_trees = max(1, int(best_iteration) + 1)
+    final = create_model(iterations=selected_trees, verbose=False)
+    final_training = pd.concat([train, test], ignore_index=True)
+    final.fit(final_training[feature_columns], final_training[RESIDUAL_TARGET_COLUMN],
+              cat_features=categorical_columns)
+    validate_delta, validate_delay = predict_final_delay(final, validate, feature_columns)
+    if not np.isfinite(validate_delay).all():
+        raise ValueError("Non-finite validate predictions")
+
     metrics = {
         "target": (
             "target_delay_s - cur_dev_s"
@@ -164,7 +184,12 @@ def run(input_dir: Path, output_dir: Path):
         },
         "feature_count": len(feature_columns),
         "categorical_columns": categorical_columns,
-        "best_iteration": model.get_best_iteration(),
+        "best_iteration": best_iteration,
+        "selected_trees": selected_trees,
+        "local_test_model_training_splits": ["train"],
+        "final_model_training_splits": ["train", "test"],
+        "final_model_training_rows": int(len(final_training)),
+        "test_metric_note": "Test was used for early stopping, so its MAE is a tuning metric, not an unbiased final estimate.",
         "baselines": {
             "median_train_delta": baseline_median,
         },
@@ -187,7 +212,7 @@ def run(input_dir: Path, output_dir: Path):
 
     print(json.dumps(metrics, indent=2, ensure_ascii=False))
 
-    model.save_model(str(output_dir / "catboost_residual.cbm"))
+    final.save_model(str(output_dir / "catboost_residual.cbm"))
 
     test_predictions.to_csv(output_dir / "test_predictions.csv", index=False)
     worst_predictions = (test_predictions.sort_values("absolute_error_s", ascending=False).head(50))
@@ -197,19 +222,38 @@ def run(input_dir: Path, output_dir: Path):
     
     with open(output_dir / "metrics.json", "w", encoding="utf-8") as file:
         json.dump(metrics, file, indent=2, ensure_ascii=False)
-    save_feature_importance(model, feature_columns, output_dir)
+    save_feature_importance(final, feature_columns, output_dir)
+
+    validate_predictions = pd.DataFrame({"sample_id": validate[ID_COLUMN].astype(str),
+                                         "cur_dev_s": validate[CURRENT_DELAY_COLUMN],
+                                         "predicted_delta_s": validate_delta,
+                                         "prediction": validate_delay})
+    validate_predictions.to_csv(output_dir / "validate_predictions.csv", index=False)
+    submission = validate_predictions[["sample_id", "prediction"]].copy()
+    if dataset_zip is not None:
+        with zipfile.ZipFile(dataset_zip) as archive:
+            with archive.open("sample_submission.csv") as stream:
+                template = pd.read_csv(stream, sep=";", dtype={"sample_id": str})
+        if submission.sample_id.duplicated().any() or template.sample_id.duplicated().any():
+            raise ValueError("Duplicate sample_id in validate or submission template")
+        if set(submission.sample_id) != set(template.sample_id):
+            raise ValueError("Validate sample IDs do not match submission template")
+        submission = template[["sample_id"]].merge(submission, on="sample_id", validate="one_to_one")
+    submission.to_csv(output_dir / "submission.csv", sep=";", index=False)
+    return metrics
 
 
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", type=Path, default=Path("data/processed"))
     parser.add_argument("--output", type=Path, default=Path("artifacts/catboost_base"))
+    parser.add_argument("--dataset", type=Path, default=Path("data/dataset.zip"))
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
-    run(args.input, args.output)
+    run(args.input, args.output, args.dataset)
 
 
 if __name__ == "__main__":

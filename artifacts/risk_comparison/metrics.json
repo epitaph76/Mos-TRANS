@@ -328,5 +328,13 @@
     "auc": 0.9031565278193986,
     "logloss": 0.3080612277593762
   },
+  "local_test_model_training_splits": [
+    "train"
+  ],
+  "selected_model_training_splits": [
+    "train",
+    "test"
+  ],
+  "selected_model_training_rows": 4787,
   "limits": "One day and 13 original trajectories; OOF model selection/threshold tuning make selected OOF F1 optimistic. Published test shares day and vehicles with train."
 }

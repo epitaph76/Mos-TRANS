@@ -187,6 +187,14 @@
       71
     ]
   },
-  "selection": "Trees and decision threshold selected from real-vehicle family holdouts; test labels only used for final report.",
+  "selection": "Trees and decision threshold selected from real-vehicle family holdouts; test scored using the train-only model, then included in final training.",
+  "local_test_model_training_splits": [
+    "train"
+  ],
+  "final_model_training_splits": [
+    "train",
+    "test"
+  ],
+  "final_model_training_rows": 4787,
   "limits": "Published test shares vehicles and day with train; classifier probabilities are not seconds of delay."
 }

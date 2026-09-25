@@ -12,6 +12,8 @@
 ## Данные
 
 [Исходный датасет на Яндекс Диске](https://disk.yandex.ru/d/CA6tsj4aJJ4Aaw). Локальная копия находится в `data/dataset.zip` и исключена из Git.
+В архиве `train` и `test` имеют метки, а `validate` — скрытый набор для
+платформы без ответов. Официальная метрика — MAE задержки в секундах.
 
 ## Сдача
 
@@ -48,8 +50,10 @@ py -3.12 -m venv .venv
 укажите путь к `dataset.zip` и папке результатов на Drive и запустите ячейки сверху вниз.
 Архив копируется в `/content`, затем выполняется общая предобработка. Три
 групповых holdout отделяют исходные ТС вместе с их синтетическими копиями;
-число деревьев выбирается по реальным точкам holdout. Публикуемый test нужен
-только для итоговых метрик. Сохраняются модель, вероятности для test и validate,
+число деревьев выбирается по реальным точкам holdout. На размеченном test
+сначала оценивается модель, обученная только на train; затем финальная модель
+обучается на train + test и прогнозирует validate. Сохраняются обе модели,
+вероятности для test и validate,
 метрики, таблица holdout-прогнозов и важности признаков.
 Результат проверенного локального запуска также находится в
 `artifacts/catboost_classifier/`.
@@ -102,7 +106,8 @@ out-of-fold прогнозах, поэтому такой F1 несколько 
 ```
 
 В папке результата сохраняются `metrics.json`, прогнозы для каждого отложенного
-ТС, test и validate, а также `selected_model.joblib`. После подготовки признаков
+ТС, test и validate, а также `local_test_model.joblib` (только train) и
+`selected_model.joblib` (train + test, для validate). После подготовки признаков
 вызов `mos_trans.modeling.compare_risk.predict(model_path, features)` возвращает
 вероятности. В Colab архив читается локально из `/content`, результаты и кэш
 признаков лежат на Drive. Test содержит тот же день и ТС, поэтому не заменяет
@@ -143,5 +148,30 @@ Optuna выполняет 25 проб на 10 семействах ТС с вн�
 Проверенные таблицы и параметры сохранены в `artifacts/risk_history/`,
 `artifacts/risk_tuning/` и `artifacts/risk_comparison/`. Ноутбук Colab запускает
 их в том же порядке.
+
+## Размеченный test и скрытый validate: MAE в секундах
+
+В README исходного архива указано: `labels_train.csv` и `labels_test.csv` имеют
+ответы, а для `validate/points.csv` ответов нет. Test годится для локальной
+проверки и подбора; после выбора конфигурации его можно присоединить к train
+для финального обучения. Validate проверяет платформа после загрузки
+`submission.csv`. Официальная метрика — **MAE задержки в секундах**. Вероятности
+бинарного классификатора `target_delay_s > 150` для этого файла не подходят.
+
+Регрессор `mos_trans.modeling.catboost` прогнозирует остаточную задержку
+`target_delay_s - cur_dev_s`. Он выбирает число деревьев по размеченному test,
+сохраняет модель этого этапа и её test-прогнозы, затем заново обучается на
+train + test с выбранным числом деревьев и создаёт `validate_predictions.csv`
+и `submission.csv` с колонками `sample_id;prediction`. Его MAE на test
+оптимистична для выбора числа деревьев, поскольку test служит `eval_set`;
+скрытый MAE validate заранее неизвестен.
+Для запуска на Drive используйте [Colab-ноутбук MAE](https://colab.research.google.com/github/epitaph76/Mos-TRANS/blob/ya-dolbayob/notebooks/train_catboost_mae_colab.ipynb).
+
+```powershell
+.\.venv\Scripts\python.exe -m mos_trans.modeling.catboost --input data/processed --dataset data/dataset.zip --output data/catboost-final
+```
+
+Файл `submission.csv` создаётся локально. Загрузка на платформу выполняется
+отдельно.
 
 Вместо `data/dataset.zip` можно указать распакованную папку с `train/`, `test/`, `validate/` и `labels/`. Ядро создаёт очищенный `traffic_clean.parquet` и таблицы `train/test/validate_samples.parquet` и `train/test/validate_features.parquet` в папке `data/processed/`, исключённой из Git. Формат и определения всех полей описаны в [FEATURES.md](FEATURES.md). Модельные ветки используют эти выходы и не чистят исходные CSV независимо друг от друга.

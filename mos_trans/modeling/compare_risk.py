@@ -217,6 +217,8 @@ def run(dataset_zip: str | Path, processed_dir: str | Path, cache_dir: str | Pat
     train = pd.read_parquet(paths["train"])
     test = pd.read_parquet(paths["test"])
     validate = pd.read_parquet(paths["validate"])
+    if validate.target_delay_s.notna().any():
+        raise ValueError("Validate must remain unlabeled")
     families = family_map(dataset_zip, {str(value) for value in train.tr_id if not str(value).startswith("900")})
     family_id = train.tr_id.astype(str).map(families)
     real_ids = sorted(set(family_id[~train.tr_id.astype(str).str.startswith("900")]))
@@ -252,16 +254,19 @@ def run(dataset_zip: str | Path, processed_dir: str | Path, cache_dir: str | Pat
     oof.to_csv(output_dir / "oof_predictions.csv", index=False, lineterminator="\n")
     test_report = None
     if evaluate_test:
-        artifact = _fit_model(chosen, train, config)
-        joblib.dump(artifact, output_dir / "selected_model.joblib")
-        test_probability = _predict_fitted(artifact, test)
-        validate_probability = _predict_fitted(artifact, validate)
+        local_model = _fit_model(chosen, train, config)
+        joblib.dump(local_model, output_dir / "local_test_model.joblib")
+        test_probability = _predict_fitted(local_model, test)
         threshold = chosen_threshold
         test_report = _score(labels(test.target_delay_s), test_probability, threshold)
         pd.DataFrame({"sample_id": test.sample_id.astype(str), "tr_id": test.tr_id.astype(str),
                       "actual_class": labels(test.target_delay_s), "probability_delay_over_150s": test_probability,
                       "predicted_class": (test_probability >= threshold).astype(int)}).to_csv(
                           output_dir / "test_predictions.csv", index=False, lineterminator="\n")
+        final_training = pd.concat([train, test], ignore_index=True)
+        final_model = _fit_model(chosen, final_training, config)
+        joblib.dump(final_model, output_dir / "selected_model.joblib")
+        validate_probability = _predict_fitted(final_model, validate)
         pd.DataFrame({"sample_id": validate.sample_id.astype(str),
                       "probability_delay_over_150s": validate_probability,
                       "predicted_class": (validate_probability >= threshold).astype(int)}).to_csv(
@@ -272,6 +277,9 @@ def run(dataset_zip: str | Path, processed_dir: str | Path, cache_dir: str | Pat
               "families": real_ids, "oof_n_real": int(len(oof)), "comparison": comparison,
               "selected_by_oof_ap": chosen, "oof_by_family": by_family,
               "lightgbm_vehicle_id_ablation": id_ablation, "test": test_report,
+              "local_test_model_training_splits": ["train"],
+              "selected_model_training_splits": ["train", "test"],
+              "selected_model_training_rows": int(len(train) + len(test)),
               "limits": "One day and 13 original trajectories; OOF model selection/threshold tuning make selected OOF F1 optimistic. Published test shares day and vehicles with train."}
     (output_dir / "metrics.json").write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
     return report

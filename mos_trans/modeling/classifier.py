@@ -176,6 +176,8 @@ def run(input_dir: str | Path, dataset_zip: str | Path, output_dir: str | Path,
     train = pd.read_parquet(input_dir / "train_features.parquet")
     test = pd.read_parquet(input_dir / "test_features.parquet")
     validate = pd.read_parquet(input_dir / "validate_features.parquet")
+    if validate.target_delay_s.notna().any():
+        raise ValueError("Validate must remain unlabeled")
     columns = feature_columns(train)
     x_train = model_input(train, columns)
     x_test = model_input(test, columns)
@@ -213,15 +215,20 @@ def run(input_dir: str | Path, dataset_zip: str | Path, output_dir: str | Path,
         rows["predicted_class"] = (rows["probability_delay_over_150s"] >= decision_threshold).astype(int)
     print(f"Decision threshold={decision_threshold:.2f}, mean holdout F1={max(threshold_scores):.3f}", flush=True)
     chosen_trees = int(np.median([fold["trees"] for fold in folds]))
-    final = _model(config, chosen_trees, SEEDS[0])
-    final.fit(x_train, y_train, cat_features=list(CATEGORICAL))
+    local_test_model = _model(config, chosen_trees, SEEDS[0])
+    local_test_model.fit(x_train, y_train, cat_features=list(CATEGORICAL))
     output_dir.mkdir(parents=True, exist_ok=True)
+    local_model_path = output_dir / "catboost_classifier_local_test.cbm"
+    local_test_model.save_model(str(local_model_path))
+    test_probabilities = local_test_model.predict_proba(x_test)
+    final = _model(config, chosen_trees, SEEDS[0])
+    final.fit(pd.concat([x_train, x_test], ignore_index=True), np.r_[y_train, y_test],
+              cat_features=list(CATEGORICAL))
     model_path = output_dir / "catboost_classifier.cbm"
     final.save_model(str(model_path))
     (output_dir / "holdout_predictions.csv").write_bytes(
         pd.concat(oof).to_csv(index=False, lineterminator="\n").encode("utf-8"))
     digest = hashlib.sha256(dataset_zip.read_bytes()).hexdigest()
-    test_probabilities = final.predict_proba(x_test)
     report = {
         "dataset_sha256": digest, "config": asdict(config), "delay_threshold_s": DELAY_THRESHOLD_S,
         "positive_definition": "target_delay_s > 150",
@@ -230,12 +237,15 @@ def run(input_dir: str | Path, dataset_zip: str | Path, output_dir: str | Path,
         "holdout": folds, "holdout_f1_mean": float(np.mean([fold["f1"] for fold in folds])),
         "holdout_average_precision_mean": float(np.mean([fold["average_precision"] for fold in folds])),
         "selected_trees": chosen_trees, "test": _metrics(y_test, test_probabilities, decision_threshold),
-        "selection": "Trees and decision threshold selected from real-vehicle family holdouts; test labels only used for final report.",
+        "selection": "Trees and decision threshold selected from real-vehicle family holdouts; test scored using the train-only model, then included in final training.",
+        "local_test_model_training_splits": ["train"],
+        "final_model_training_splits": ["train", "test"],
+        "final_model_training_rows": int(len(train) + len(test)),
         "limits": "Published test shares vehicles and day with train; classifier probabilities are not seconds of delay.",
     }
     metadata_path = output_dir / "metrics.json"
     metadata_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-    test_predictions = predict(model_path, metadata_path, test)
+    test_predictions = predict(local_model_path, metadata_path, test)
     test_predictions.insert(1, "actual_class", y_test)
     test_predictions.to_csv(output_dir / "test_predictions.csv", index=False, lineterminator="\n")
     predict(model_path, metadata_path, validate).to_csv(
