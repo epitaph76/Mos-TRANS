@@ -75,4 +75,36 @@ holdout и опубликованным test показывает огранич
 оптимистичен, поскольку на них же выбирался порог). На опубликованном test:
 F1 0,619, precision 0,632, recall 0,606, ROC AUC 0,879 и AP 0,729.
 
+## Сравнение CatBoost, LightGBM и движения по маршруту
+
+[Ноутбук Colab](https://colab.research.google.com/github/epitaph76/Mos-TRANS/blob/ya-dolbayob/notebooks/compare_risk_colab.ipynb)
+сравнивает пять вариантов и ансамбль для вероятности задержки строго больше
+150 секунд. Для каждого из 13 исходных ТС он обучает модели без этого ТС и
+его синтетических копий, а метрики считает только на реальных точках. Главная
+метрика выбора — average precision (AP); порог для F1 выбирается на тех же
+out-of-fold прогнозах, поэтому такой F1 несколько оптимистичен.
+
+Дополнительные признаки включают продвижение за 2, 5 и 10 минут, длительность
+стоянки и расстояние до ближайшей плановой остановки. Расстояние «по маршруту»
+приближено отрезками между плановыми остановками: дорожной геометрии в данных
+нет. Пакет учитывается лишь после его `event_time` **и** `receive_time`;
+фактическое время прибытия не используется. Вероятностный вариант обучает
+квантили 10/50/90% остаточной задержки и интерполирует вероятность превышения
+150 секунд. Эта вероятность приблизительная, её калибровка не гарантирована.
+
+Локально:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-risk.txt
+.\.venv\Scripts\python.exe -m mos_trans.modeling.compare_risk --dataset data/dataset.zip --processed data/processed --cache data/progress-cache --output data/risk-comparison
+```
+
+В папке результата сохраняются `metrics.json`, прогнозы для каждого отложенного
+ТС, test и validate, а также `selected_model.joblib`. После подготовки признаков
+вызов `mos_trans.modeling.compare_risk.predict(model_path, features)` возвращает
+вероятности. В Colab архив читается локально из `/content`, результаты и кэш
+признаков лежат на Drive. Test содержит тот же день и ТС, поэтому не заменяет
+проверку переноса на другие дни и маршруты.
+Файлы проверенного локального запуска находятся в `artifacts/risk_comparison/`.
+
 Вместо `data/dataset.zip` можно указать распакованную папку с `train/`, `test/`, `validate/` и `labels/`. Ядро создаёт очищенный `traffic_clean.parquet` и таблицы `train/test/validate_samples.parquet` и `train/test/validate_features.parquet` в папке `data/processed/`, исключённой из Git. Формат и определения всех полей описаны в [FEATURES.md](FEATURES.md). Модельные ветки используют эти выходы и не чистят исходные CSV независимо друг от друга.
