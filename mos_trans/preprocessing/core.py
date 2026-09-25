@@ -126,17 +126,37 @@ class DataSource:
 
     def __init__(self, path: Path):
         self.path = path
+        self.prefix = ""
         if path.is_file() and path.suffix.lower() == ".zip":
             self.archive = zipfile.ZipFile(path)
+            names = set(self.archive.namelist())
+            anchor = "train/traffic.csv"
+            if anchor not in names:
+                candidates = sorted(name[: -len(anchor)] for name in names if name.endswith(anchor))
+                if len(candidates) != 1:
+                    self.archive.close()
+                    raise ValueError(
+                        "Could not locate a unique train/traffic.csv root inside "
+                        f"archive: {path}"
+                    )
+                self.prefix = candidates[0]
         elif path.is_dir():
             self.archive = None
+            if not (self.path / "train" / "traffic.csv").is_file():
+                candidates = sorted(self.path.glob("*/train/traffic.csv"))
+                if len(candidates) != 1:
+                    raise ValueError(
+                        "Could not locate a unique train/traffic.csv root inside "
+                        f"directory: {path}"
+                    )
+                self.path = candidates[0].parents[1]
         else:
             raise ValueError(f"Expected dataset.zip or extracted directory: {path}")
 
     @contextmanager
     def csv_rows(self, member: str) -> Iterator[csv.DictReader]:
         if self.archive:
-            with self.archive.open(member) as binary:
+            with self.archive.open(f"{self.prefix}{member}") as binary:
                 with io.TextIOWrapper(binary, encoding="utf-8-sig", newline="") as stream:
                     yield csv.DictReader(stream)
         else:

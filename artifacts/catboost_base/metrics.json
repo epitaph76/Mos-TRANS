@@ -1,0 +1,30 @@
+{
+  "target": "target_delay_s - cur_dev_s",
+  "rows": {
+    "train": 4434,
+    "test": 353,
+    "validate": 151
+  },
+  "feature_count": 37,
+  "categorical_columns": [
+    "target_stop_id",
+    "schedule_target_address"
+  ],
+  "best_iteration": 2427,
+  "baselines": {
+    "median_train_delta": {
+      "median_delta_s": 0.0,
+      "mae": 93.35977337110482,
+      "rmse": 128.15478424628736
+    }
+  },
+  "catboost": {
+    "mae_delay_s": 52.68623118079915,
+    "rmse_delay_s": 76.46698883547941,
+    "mae_delta_s": 52.68623118079915,
+    "mean_error_s": 6.545769193318633,
+    "median_absolute_error_s": 38.78562784340664,
+    "p90_absolute_error_s": 112.18581228792303,
+    "predicted_delta_mean_s": -14.143502904366791
+  }
+}

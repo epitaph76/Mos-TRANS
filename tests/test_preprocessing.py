@@ -123,12 +123,20 @@ class PipelineTests(unittest.TestCase):
             with zipfile.ZipFile(archive, "w") as output_zip:
                 for path in sorted(source.rglob("*.csv")):
                     output_zip.write(path, path.relative_to(source).as_posix())
+            prefixed_archive = root / "dataset-prefixed.zip"
+            with zipfile.ZipFile(prefixed_archive, "w") as output_zip:
+                for path in sorted(source.rglob("*.csv")):
+                    member = Path("dataset") / path.relative_to(source)
+                    output_zip.write(path, member.as_posix())
             from_dir = root / "from_dir"
             from_zip = root / "from_zip"
+            from_prefixed_zip = root / "from_prefixed_zip"
             self.assertEqual(build_dataset(source, from_dir), {"traffic": 1, "train": 1, "test": 1, "validate": 1})
             self.assertEqual(build_dataset(archive, from_zip), {"traffic": 1, "train": 1, "test": 1, "validate": 1})
+            self.assertEqual(build_dataset(prefixed_archive, from_prefixed_zip), {"traffic": 1, "train": 1, "test": 1, "validate": 1})
             for name in ("traffic_clean", "train_samples", "test_samples", "validate_samples", "train_features", "test_features", "validate_features"):
                 self.assertTrue(pq.read_table(from_dir / f"{name}.parquet").equals(pq.read_table(from_zip / f"{name}.parquet")))
+                self.assertTrue(pq.read_table(from_dir / f"{name}.parquet").equals(pq.read_table(from_prefixed_zip / f"{name}.parquet")))
             train = pq.read_table(from_dir / "train_features.parquet").to_pylist()[0]
             test = pq.read_table(from_dir / "test_features.parquet").to_pylist()[0]
             validate = pq.read_table(from_dir / "validate_features.parquet").to_pylist()[0]
