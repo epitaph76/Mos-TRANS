@@ -1,0 +1,47 @@
+{
+  "event": "actual delay > 120 seconds at target stop",
+  "target_population": "real vehicles; synthetic relatives held with parent family",
+  "evaluation": "nested 4-fold outer / 3-fold inner GroupKFold; no outer family in model or calibrator",
+  "selection_metric": "Brier score on pooled outer real-vehicle predictions",
+  "selected_method": "raw",
+  "scores": {
+    "raw": {
+      "n": 1494,
+      "positives": 326,
+      "brier": 0.13340495737055008,
+      "log_loss": 0.4292455628643479,
+      "mean_shown": 0.21131962465815712,
+      "actual_rate": 0.2182061579651941,
+      "roc_auc": 0.7669079334397849
+    },
+    "sigmoid": {
+      "n": 1494,
+      "positives": 326,
+      "brier": 0.13385161213405675,
+      "log_loss": 0.4295359371331013,
+      "mean_shown": 0.22261302569545116,
+      "actual_rate": 0.2182061579651941,
+      "roc_auc": 0.7690036977897301
+    },
+    "isotonic": {
+      "n": 1494,
+      "positives": 326,
+      "brier": 0.13611426596849913,
+      "log_loss": 0.44426090001933777,
+      "mean_shown": 0.22365034399331263,
+      "actual_rate": 0.2182061579651941,
+      "roc_auc": 0.7606114484410456
+    }
+  },
+  "n_real_families": 13,
+  "limitations": "One day and 13 real vehicle families; estimates for 80%+ bins may be sparse. Method choice on outer predictions makes selected score mildly optimistic.",
+  "notebook_feature_baseline": {
+    "n": 1494,
+    "positives": 326,
+    "brier": 0.14134523080077918,
+    "log_loss": 0.45313225122924633,
+    "mean_shown": 0.22047313627190976,
+    "actual_rate": 0.2182061579651941,
+    "roc_auc": 0.7451584691990923
+  }
+}
