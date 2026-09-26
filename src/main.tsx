@@ -23,6 +23,9 @@ type Vehicle = {
   reason: string | null; recommendation: string | null; section: string | null;
   source: string; doorStatus: string | null;
   currentDeviationSeconds: number | null;
+  forecastAvailability: 'ready' | 'no_point' | 'ml_unavailable' | 'pending';
+  nearestForecastPointAt: string | null;
+  nearestForecastPointDirection: 'next' | 'previous' | null;
 }
 type View = 'map' | 'schedule' | 'routes' | 'vehicles' | 'events' | 'analytics'
 type Filter = 'all' | 'normal' | 'deviation' | 'risk'
@@ -48,6 +51,9 @@ function normalizeVehicle(value: Partial<Vehicle> & { id: string; position?: [nu
     recommendation: value.recommendation ?? null, section: value.section ?? null,
     source: value.source ?? 'NDTP', doorStatus: value.doorStatus ?? null,
     currentDeviationSeconds: value.currentDeviationSeconds ?? null,
+    forecastAvailability: value.forecastAvailability ?? 'no_point',
+    nearestForecastPointAt: value.nearestForecastPointAt ?? null,
+    nearestForecastPointDirection: value.nearestForecastPointDirection ?? null,
   }
 }
 
@@ -91,9 +97,17 @@ function VehicleRow({ vehicle, active, onClick }: { vehicle: Vehicle; active: bo
   </button>
 }
 
-function VehicleDetail({ vehicle, time, day, demo, onBack }: { vehicle: Vehicle; time: number; day: string; demo: boolean; onBack: () => void }) {
+function VehicleDetail({ vehicle, time, day, demo, onBack, onJumpToForecast }: { vehicle: Vehicle; time: number; day: string; demo: boolean; onBack: () => void; onJumpToForecast: (seconds: number) => void }) {
   const status = statusOf(vehicle)
   const [tab, setTab] = useState<'tracking' | 'analytics' | 'details'>('tracking')
+  const nearestPointLabel = timeOnly(vehicle.nearestForecastPointAt)
+  const unavailableReason = vehicle.forecastAvailability === 'ml_unavailable'
+    ? 'Прогнозная точка есть, но ML-сервис сейчас недоступен.'
+    : vehicle.forecastAvailability === 'pending'
+      ? 'Прогнозная точка есть, ответ модели пока не получен.'
+      : vehicle.nearestForecastPointAt
+        ? `В ${formatTime(time)} для этого ТС нет прогнозной точки. Ближайшая ${vehicle.nearestForecastPointDirection === 'next' ? 'следующая' : 'предыдущая'} — в ${nearestPointLabel}. Исторический датасет размечен отдельными срезами.`
+        : 'Для этого ТС в архиве нет прогнозных точек.'
   const allStops = vehicle.stops
     .map(stop => ({ stop, timestamp: stopSeconds(stop.time, day) }))
     .sort((a, b) => a.timestamp - b.timestamp)
@@ -142,7 +156,7 @@ function VehicleDetail({ vehicle, time, day, demo, onBack }: { vehicle: Vehicle;
       }) : <p className="empty-stop-events">Нет плановых остановок для выбранного времени.</p>}</div>
     </div>}
     {tab === 'analytics' && <div className="detail-tab-content" role="tabpanel">
-      <div className="prediction-block"><span className="eyebrow">Прогноз на 10–15 минут</span><strong className={status}>{minutes(vehicle.estimateSeconds)}</strong><p>{vehicle.probability === null ? 'В выбранный момент нет прогнозной точки с доступной моделью.' : `Вероятность опоздания более чем на 2 минуты: ${Math.round(vehicle.probability * 100)}%.`}</p></div>
+      <div className="prediction-block"><span className="eyebrow">Прогноз на 10–15 минут</span><strong className={status}>{minutes(vehicle.estimateSeconds)}</strong><p>{vehicle.probability === null ? unavailableReason : `Вероятность опоздания более чем на 2 минуты: ${Math.round(vehicle.probability * 100)}%.`}</p>{vehicle.probability === null && vehicle.forecastAvailability === 'no_point' && vehicle.nearestForecastPointAt && <button className="forecast-jump" onClick={() => onJumpToForecast(stopSeconds(vehicle.nearestForecastPointAt!, day))}>Перейти к точке {nearestPointLabel}</button>}</div>
       {vehicle.probability !== null && <div className="detail-section"><h3>Карточка риска</h3><div className="metric-line"><span>Целевая остановка</span><strong>{vehicle.forecastStop ? stopName(vehicle.forecastStop.name) : vehicle.forecastStopId}</strong></div><div className="metric-line"><span>Плановое прибытие</span><strong>{timeOnly(vehicle.forecastTime)}</strong></div><div className="metric-line"><span>Участок маршрута</span><strong>{vehicle.section ?? 'Участок не определён'}</strong></div><div className="metric-line"><span>Предполагаемая причина</span><strong>{vehicle.reason ?? 'Причина не определена'}</strong></div><div className="metric-line"><span>Действие</span><strong>{vehicle.recommendation ?? 'Наблюдать'}</strong></div></div>}
       <div className="detail-section"><h3>Показатели движения</h3><div className="metric-line"><span>Скорость</span><strong>{vehicle.speed} км/ч</strong></div><div className="metric-line"><span>Текущее отклонение</span><strong>{minutes(vehicle.currentDeviationSeconds)}</strong></div><div className="metric-line"><span>Прогноз отклонения</span><strong>{minutes(vehicle.estimateSeconds)}</strong></div></div>
     </div>}
@@ -307,7 +321,7 @@ function App() {
         {monitorCollapsed ? null : <aside className="right-panel">
           {selectedId ? <>
             <button className="collapse-detail" onClick={() => setMonitorCollapsed(true)} title="Свернуть мониторинг" aria-label="Свернуть мониторинг"><PanelRightClose size={18} /></button>
-            {selected ? mode === 'live' ? <LiveDetail vehicle={selected} onBack={() => setSelectedId(null)} /> : <VehicleDetail vehicle={selected} time={time} day={activePlan.date} demo={mode === 'demo'} onBack={() => setSelectedId(null)} /> : <InactiveRouteDetail id={selectedId} onBack={() => setSelectedId(null)} />}
+            {selected ? mode === 'live' ? <LiveDetail vehicle={selected} onBack={() => setSelectedId(null)} /> : <VehicleDetail vehicle={selected} time={time} day={activePlan.date} demo={mode === 'demo'} onBack={() => setSelectedId(null)} onJumpToForecast={pointTime => { setPlaying(false); setTime(pointTime) }} /> : <InactiveRouteDetail id={selectedId} onBack={() => setSelectedId(null)} />}
           </> : <>
             <div className="panel-header">
               <button className="monitor-heading" onClick={() => setMonitorCollapsed(true)} title="Свернуть мониторинг"><span className="eyebrow">МОНИТОРИНГ</span><span className="monitor-title">Транспорт на линии <span>{vehicles.length}</span></span></button>

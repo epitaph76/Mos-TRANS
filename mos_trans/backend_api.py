@@ -177,6 +177,14 @@ class Replay:
                          if prior_index >= 0 and (at - prior_times[prior_index]).total_seconds() < 60
                          else None)
             prediction = self.predictions.get(str(row.sample_id)) if row is not None else None
+            next_forecast_index = bisect_right(prior_times, at)
+            nearest_point = (prior_times[next_forecast_index] if next_forecast_index < len(prior_times)
+                             else prior_times[-1] if prior_times else None)
+            point_direction = ("next" if next_forecast_index < len(prior_times)
+                               else "previous" if prior_times else None)
+            forecast_availability = ("ready" if prediction else
+                                     "ml_unavailable" if row is not None and model_status == "unavailable" else
+                                     "pending" if row is not None else "no_point")
             cause, action = explanation(row) if row is not None and prediction else (None, None)
             target_stop = next((stop for stop in stops if row is not None and stop["id"] == str(row.target_stop_id)), None)
             vehicles.append({
@@ -192,6 +200,9 @@ class Replay:
                 "forecastStopId": str(row.target_stop_id) if row is not None else None,
                 "forecastStop": target_stop,
                 "sampleId": str(row.sample_id) if row is not None else None,
+                "forecastAvailability": forecast_availability,
+                "nearestForecastPointAt": nearest_point.isoformat() if nearest_point is not None else None,
+                "nearestForecastPointDirection": point_direction,
                 "reason": cause, "recommendation": action,
                 "section": section if row is not None else None,
                 "source": self.source_name,

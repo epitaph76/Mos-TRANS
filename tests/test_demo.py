@@ -1,11 +1,13 @@
 """Check that the teaching scenario exercises the real models causally."""
 
+import asyncio
 import tempfile
 import unittest
 from datetime import timedelta
 from pathlib import Path
 
 import pandas as pd
+import httpx
 
 from mos_trans.backend_api import Replay, next_observed_stop
 from mos_trans.demo import DAY, VEHICLE, generate
@@ -38,6 +40,17 @@ class DemoTests(unittest.TestCase):
             previous, upcoming = next_observed_stop(replay.stops[VEHICLE], stalled_packet)
             self.assertEqual(previous["id"], "DEMO-05")
             self.assertEqual(upcoming["id"], "DEMO-06")
+            no_point = asyncio.run(replay.snapshot(9 * 3600 + 4 * 60, "", None))["vehicles"][0]
+            self.assertEqual(no_point["forecastAvailability"], "no_point")
+            self.assertEqual(no_point["nearestForecastPointAt"], (DAY + timedelta(minutes=5)).isoformat())
+
+            async def unavailable_snapshot():
+                transport = httpx.MockTransport(lambda _: httpx.Response(503))
+                async with httpx.AsyncClient(transport=transport) as client:
+                    return await replay.snapshot(9 * 3600 + 5 * 60, "http://ml", client)
+
+            unavailable = asyncio.run(unavailable_snapshot())["vehicles"][0]
+            self.assertEqual(unavailable["forecastAvailability"], "ml_unavailable")
 
 
 if __name__ == "__main__":
