@@ -8,6 +8,7 @@ import {
 } from 'lucide-react'
 import TransportMap from './TransportMap'
 import plan from './data/plan.json'
+import demoPlan from './data/demo_plan.json'
 import { formatTime, stopSeconds, type SharedNetwork } from './timeline'
 import './style.css'
 import './detail.css'
@@ -21,14 +22,15 @@ type Vehicle = {
   forecastStop: Stop | null; probability: number | null; stale: boolean;
   reason: string | null; recommendation: string | null; section: string | null;
   source: string; doorStatus: string | null;
+  currentDeviationSeconds: number | null;
 }
 type View = 'map' | 'schedule' | 'routes' | 'vehicles' | 'events' | 'analytics'
 type Filter = 'all' | 'normal' | 'deviation' | 'risk'
 type Status = 'normal' | 'minor' | 'delay' | 'critical' | 'early' | 'unknown'
 
-const network = plan.network as SharedNetwork
-const startTime = plan.start
-const endTime = plan.end
+type Mode = 'replay' | 'demo' | 'live'
+const initialDemo = new URLSearchParams(window.location.search).get('demo') === '1'
+const initialAutoplay = new URLSearchParams(window.location.search).get('autoplay') === '1'
 const playbackSpeeds = [1, 15, 60, 300, 900]
 
 function normalizeVehicle(value: Partial<Vehicle> & { id: string; position?: [number, number] | null }): Vehicle | null {
@@ -43,6 +45,7 @@ function normalizeVehicle(value: Partial<Vehicle> & { id: string; position?: [nu
     stale: value.stale ?? false, reason: value.reason ?? null,
     recommendation: value.recommendation ?? null, section: value.section ?? null,
     source: value.source ?? 'NDTP', doorStatus: value.doorStatus ?? null,
+    currentDeviationSeconds: value.currentDeviationSeconds ?? null,
   }
 }
 
@@ -86,13 +89,13 @@ function VehicleRow({ vehicle, active, onClick }: { vehicle: Vehicle; active: bo
   </button>
 }
 
-function VehicleDetail({ vehicle, time, onBack }: { vehicle: Vehicle; time: number; onBack: () => void }) {
+function VehicleDetail({ vehicle, time, day, onBack }: { vehicle: Vehicle; time: number; day: string; onBack: () => void }) {
   const status = statusOf(vehicle)
   const [tab, setTab] = useState<'tracking' | 'analytics' | 'details'>('tracking')
   const windowStart = time - 45 * 60
   const windowEnd = time + 45 * 60
   const stopEvents = vehicle.stops
-    .map(stop => ({ stop, timestamp: stopSeconds(stop.time, plan.date) }))
+    .map(stop => ({ stop, timestamp: stopSeconds(stop.time, day) }))
     .filter(event => event.timestamp >= windowStart && event.timestamp <= windowEnd)
   return <div className="detail-pane">
     <button className="back-button" onClick={onBack}><ArrowLeft size={17} /> К списку ТС</button>
@@ -122,7 +125,7 @@ function VehicleDetail({ vehicle, time, onBack }: { vehicle: Vehicle; time: numb
     {tab === 'analytics' && <div className="detail-tab-content" role="tabpanel">
       <div className="prediction-block"><span className="eyebrow">Прогноз на 10–15 минут</span><strong className={status}>{minutes(vehicle.estimateSeconds)}</strong><p>{vehicle.probability === null ? 'В выбранный момент нет прогнозной точки с доступной моделью.' : `Вероятность опоздания более чем на 2 минуты: ${Math.round(vehicle.probability * 100)}%.`}</p></div>
       {vehicle.probability !== null && <div className="detail-section"><h3>Карточка риска</h3><div className="metric-line"><span>Целевая остановка</span><strong>{vehicle.forecastStop ? stopName(vehicle.forecastStop.name) : vehicle.forecastStopId}</strong></div><div className="metric-line"><span>Плановое прибытие</span><strong>{timeOnly(vehicle.forecastTime)}</strong></div><div className="metric-line"><span>Участок маршрута</span><strong>{vehicle.section ?? 'Участок не определён'}</strong></div><div className="metric-line"><span>Предполагаемая причина</span><strong>{vehicle.reason ?? 'Причина не определена'}</strong></div><div className="metric-line"><span>Действие</span><strong>{vehicle.recommendation ?? 'Наблюдать'}</strong></div></div>}
-      <div className="detail-section"><h3>Показатели движения</h3><div className="metric-line"><span>Скорость</span><strong>{vehicle.speed} км/ч</strong></div><div className="metric-line"><span>Прогноз отклонения</span><strong>{minutes(vehicle.estimateSeconds)}</strong></div></div>
+      <div className="detail-section"><h3>Показатели движения</h3><div className="metric-line"><span>Скорость</span><strong>{vehicle.speed} км/ч</strong></div><div className="metric-line"><span>Текущее отклонение</span><strong>{minutes(vehicle.currentDeviationSeconds)}</strong></div><div className="metric-line"><span>Прогноз отклонения</span><strong>{minutes(vehicle.estimateSeconds)}</strong></div></div>
     </div>}
     {tab === 'details' && <div className="detail-tab-content" role="tabpanel">
       <div className="detail-section"><h3>Телеметрия</h3><div className="metric-line"><span>Последний GPS</span><strong>{vehicle.gpsAgeMin < 1 ? 'менее минуты назад' : `${Math.round(vehicle.gpsAgeMin)} мин назад`}</strong></div><div className="metric-line"><span>Координаты</span><strong>GPS-трек NDTP</strong></div><div className="metric-line"><span>Двери</span><strong>{vehicle.doorStatus ?? 'Нет данных в историческом CSV'}</strong></div></div>
@@ -174,20 +177,24 @@ const navItems: { id: View; label: string; icon: React.ElementType }[] = [
 ]
 
 function App() {
-  const [time, setTime] = useState(startTime)
-  const [playing, setPlaying] = useState(false)
-  const [mode, setMode] = useState<'replay' | 'live'>('replay')
+  const [time, setTime] = useState(initialDemo ? demoPlan.start : plan.start)
+  const [playing, setPlaying] = useState(initialDemo && initialAutoplay)
+  const [mode, setMode] = useState<Mode>(initialDemo ? 'demo' : 'replay')
+  const activePlan = mode === 'demo' ? demoPlan : plan
+  const startTime = activePlan.start
+  const endTime = activePlan.end
+  const network = activePlan.network as SharedNetwork
   const [vehicles, setVehicles] = useState<Vehicle[]>([])
   const [apiError, setApiError] = useState<string | null>(null)
   const [modelStatus, setModelStatus] = useState('ready')
   const timeRef = useRef(time)
   timeRef.current = time
-  const [speed, setSpeed] = useState(60)
+  const [speed, setSpeed] = useState(initialDemo ? 15 : 60)
   const [monitorCollapsed, setMonitorCollapsed] = useState(false)
   const [view, setView] = useState<View>('map')
   const [filter, setFilter] = useState<Filter>('all')
   const [search, setSearch] = useState('')
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [selectedId, setSelectedId] = useState<string | null>(initialDemo ? '130389' : null)
   const [showRoutes, setShowRoutes] = useState(true)
   const [mobileNav, setMobileNav] = useState(false)
   useEffect(() => {
@@ -200,10 +207,10 @@ function App() {
       setTime(current => Math.min(endTime, current + elapsed * speed))
     }, 100)
     return () => window.clearInterval(timer)
-  }, [playing, speed])
+  }, [playing, speed, endTime])
   useEffect(() => {
     if (time >= endTime) setPlaying(false)
-  }, [time])
+  }, [time, endTime])
   useEffect(() => {
     let mounted = true
     let busy = false
@@ -211,10 +218,10 @@ function App() {
     const load = async () => {
       if (busy) return
       const requestedTime = Math.floor(timeRef.current)
-      if (mode === 'replay' && requestedTime === lastRequestedTime) return
+      if (mode !== 'live' && requestedTime === lastRequestedTime) return
       busy = true
       try {
-        const url = mode === 'replay' ? `/api/replay/snapshot?at=${requestedTime}` : '/api/live/snapshot'
+        const url = mode === 'live' ? '/api/live/snapshot' : `/api/${mode}/snapshot?at=${requestedTime}`
         const response = await fetch(url)
         if (!response.ok) throw new Error(`API ${response.status}`)
         const state = await response.json()
@@ -241,6 +248,13 @@ function App() {
     return `${v.id} ${v.nextStop?.name ?? ''}`.toLocaleLowerCase('ru').includes(search.toLocaleLowerCase('ru'))
   })
   const countRisk = vehicles.filter(v => statusOf(v) === 'critical').length
+  const switchMode = (next: Mode) => {
+    setMode(next)
+    setPlaying(false)
+    setTime((next === 'demo' ? demoPlan : plan).start)
+    setSelectedId(next === 'demo' ? '130389' : null)
+    setSpeed(next === 'demo' ? 15 : 60)
+  }
   const select = useCallback((id: string) => {
     setSelectedId(id || null)
     setView('map')
@@ -254,19 +268,20 @@ function App() {
     </aside>
     {mobileNav && <button className="mobile-scrim" aria-label="Закрыть меню" onClick={() => setMobileNav(false)} />}
     <main className="main-area">
-      <header className="topbar"><div className="topbar-title"><button className="mobile-menu" aria-label="Открыть меню" onClick={() => setMobileNav(true)}><Menu size={22} /></button><h1>{view === 'map' ? 'Карта' : navItems.find(item => item.id === view)?.label}</h1></div><div className="topbar-actions"><button className="date-chip" onClick={() => { setMode(mode === 'replay' ? 'live' : 'replay'); setPlaying(false); setSelectedId(null) }}>{mode === 'replay' ? 'История · перейти к NDTP' : 'NDTP · перейти к истории'}</button><div className="date-chip"><CalendarDays size={16} /> {mode === 'replay' ? plan.date : 'Прямой эфир'}</div><div className="time-select"><Clock3 size={17} />{mode === 'replay' ? `${formatTime(time, true)} МСК` : 'сейчас'}</div></div></header>
+      <header className="topbar"><div className="topbar-title"><button className="mobile-menu" aria-label="Открыть меню" onClick={() => setMobileNav(true)}><Menu size={22} /></button><h1>{view === 'map' ? 'Карта' : navItems.find(item => item.id === view)?.label}</h1></div><div className="topbar-actions"><div className="mode-picker" aria-label="Источник данных"><button className={mode === 'demo' ? 'active' : ''} onClick={() => switchMode('demo')}>Учебный рейс</button><button className={mode === 'replay' ? 'active' : ''} onClick={() => switchMode('replay')}>История</button><button className={mode === 'live' ? 'active' : ''} onClick={() => switchMode('live')}>NDTP</button></div><div className="date-chip"><CalendarDays size={16} /> {mode === 'live' ? 'Прямой эфир' : activePlan.date}</div><div className="time-select"><Clock3 size={17} />{mode === 'live' ? 'сейчас' : `${formatTime(time, true)} МСК`}</div></div></header>
+      {mode === 'demo' && <div className="demo-banner"><strong>Учебный рейс 130389</strong><span>09:00–09:15 по графику · 09:15–09:22 вынужденный простой · затем замедление и накопление опоздания. Прогнозы ниже выдают настоящие модели на синтетических признаках.</span></div>}
       {apiError && <div className="service-banner">Нет связи с backend: {apiError}. Показано последнее полученное состояние.</div>}
       {modelStatus === 'unavailable' && !apiError && <div className="service-banner">ML-сервис недоступен: положение ТС обновляется, новые прогнозы временно не рассчитываются.</div>}
-      {mode === 'replay' && <div className="timeline-bar"><button className="play-button" onClick={() => { if (time >= endTime) setTime(startTime); setPlaying(!playing || time >= endTime) }} aria-label={playing ? 'Пауза' : 'Воспроизвести'} title={playing ? 'Пауза' : 'Воспроизвести'}>{playing ? <Pause size={16} fill="currentColor" /> : <Play size={16} fill="currentColor" />}</button><span className="timeline-time">{formatTime(time, true)}</span><input className="time-slider" type="range" min={startTime} max={endTime} step="1" value={time} onChange={event => { setPlaying(false); setTime(Number(event.target.value)) }} aria-valuetext={`${formatTime(time, true)} МСК`} aria-label="Выбрать время в датасете" style={{ background: `linear-gradient(to right, #1766ef ${(time - startTime) / (endTime - startTime) * 100}%, #dce5f2 0)` }} /><span className="timeline-end">{formatTime(endTime)}</span><label className="speed-control">Скорость <select value={speed} onChange={event => setSpeed(Number(event.target.value))} aria-label="Скорость воспроизведения">{playbackSpeeds.map(value => <option key={value} value={value}>{value}×</option>)}</select><ChevronDown size={13} /></label></div>}
+      {mode !== 'live' && <div className="timeline-bar"><button className="play-button" onClick={() => { if (time >= endTime) setTime(startTime); setPlaying(!playing || time >= endTime) }} aria-label={playing ? 'Пауза' : 'Воспроизвести'} title={playing ? 'Пауза' : 'Воспроизвести'}>{playing ? <Pause size={16} fill="currentColor" /> : <Play size={16} fill="currentColor" />}</button><span className="timeline-time">{formatTime(time, true)}</span><input className="time-slider" type="range" min={startTime} max={endTime} step="1" value={time} onChange={event => { setPlaying(false); setTime(Number(event.target.value)) }} aria-valuetext={`${formatTime(time, true)} МСК`} aria-label="Выбрать время в датасете" style={{ background: `linear-gradient(to right, #1766ef ${(time - startTime) / (endTime - startTime) * 100}%, #dce5f2 0)` }} /><span className="timeline-end">{formatTime(endTime)}</span><label className="speed-control">Скорость <select value={speed} onChange={event => setSpeed(Number(event.target.value))} aria-label="Скорость воспроизведения">{playbackSpeeds.map(value => <option key={value} value={value}>{value}×</option>)}</select><ChevronDown size={13} /></label></div>}
       <div className="workspace">
         <section className="primary-panel">
-          {view === 'map' ? <TransportMap vehicles={vehicles} selected={selected} selectedId={selectedId} selectedStatus={selected ? statusOf(selected) : 'unknown'} onSelect={select} showRoutes={showRoutes && mode === 'replay'} setShowRoutes={setShowRoutes} collapsed={monitorCollapsed} network={network} /> : <DataView view={view} vehicles={vehicles} select={select} />}
+          {view === 'map' ? <TransportMap vehicles={vehicles} selected={selected} selectedId={selectedId} selectedStatus={selected ? statusOf(selected) : 'unknown'} onSelect={select} showRoutes={showRoutes && mode !== 'live'} setShowRoutes={setShowRoutes} collapsed={monitorCollapsed} network={network} /> : <DataView view={view} vehicles={vehicles} select={select} />}
         </section>
         {monitorCollapsed && <button className="restore-monitor" onClick={() => setMonitorCollapsed(false)} title="Открыть мониторинг" aria-label="Открыть мониторинг"><PanelRightOpen size={19} /></button>}
         {monitorCollapsed ? null : <aside className="right-panel">
           {selectedId ? <>
             <button className="collapse-detail" onClick={() => setMonitorCollapsed(true)} title="Свернуть мониторинг" aria-label="Свернуть мониторинг"><PanelRightClose size={18} /></button>
-            {selected ? mode === 'live' ? <LiveDetail vehicle={selected} onBack={() => setSelectedId(null)} /> : <VehicleDetail vehicle={selected} time={time} onBack={() => setSelectedId(null)} /> : <InactiveRouteDetail id={selectedId} onBack={() => setSelectedId(null)} />}
+            {selected ? mode === 'live' ? <LiveDetail vehicle={selected} onBack={() => setSelectedId(null)} /> : <VehicleDetail vehicle={selected} time={time} day={activePlan.date} onBack={() => setSelectedId(null)} /> : <InactiveRouteDetail id={selectedId} onBack={() => setSelectedId(null)} />}
           </> : <>
             <div className="panel-header">
               <button className="monitor-heading" onClick={() => setMonitorCollapsed(true)} title="Свернуть мониторинг"><span className="eyebrow">МОНИТОРИНГ</span><span className="monitor-title">Транспорт на линии <span>{vehicles.length}</span></span></button>

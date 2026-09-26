@@ -15,6 +15,7 @@ import pandas as pd
 from fastapi import FastAPI, HTTPException, Query
 
 from mos_trans.features.build import build_feature_set
+from mos_trans.demo import generate as generate_demo
 from mos_trans.inference import FORBIDDEN, json_records
 from mos_trans.ndtp import LiveStore
 from mos_trans.preprocessing.core import DataSource, _point, _time, build_dataset, clean_traffic_row
@@ -48,12 +49,19 @@ def stop_label(stop: dict) -> str:
 
 
 class Replay:
-    def __init__(self, dataset: Path, features_path: Path):
+    def __init__(self, dataset: Path, features_path: Path,
+                 source_name: str = "Исторический NDTP"):
+        self.source_name = source_name
         self.rows = pd.read_parquet(features_path).drop(columns=list(FORBIDDEN), errors="ignore")
         self.rows["T"] = pd.to_datetime(self.rows["T"])
         self.rows["target_time_begin"] = pd.to_datetime(self.rows["target_time_begin"])
         self.rows_by_id = {str(row.sample_id): row for _, row in self.rows.iterrows()}
         self.ordered = self.rows.sort_values("T")
+        self.row_times = {}
+        self.vehicle_rows = {}
+        for vehicle, group in self.ordered.groupby("tr_id"):
+            self.row_times[str(vehicle)] = group["T"].tolist()
+            self.vehicle_rows[str(vehicle)] = list(group.itertuples(index=False))
         self.predictions: dict[str, dict] = {}
         self.stops: dict[str, list[dict]] = defaultdict(list)
         self.gps: dict[str, tuple[list[datetime], list]] = {}
@@ -133,6 +141,11 @@ class Replay:
             section = (f"{stop_label(previous_stop)} → {stop_label(next_stop)}"
                        if previous_stop is not None and next_stop is not None else None)
             row = active_by_vehicle.get(vehicle)
+            prior_times = self.row_times.get(vehicle, [])
+            prior_index = bisect_right(prior_times, at) - 1
+            prior_row = (self.vehicle_rows[vehicle][prior_index]
+                         if prior_index >= 0 and (at - prior_times[prior_index]).total_seconds() < 60
+                         else None)
             prediction = self.predictions.get(str(row.sample_id)) if row is not None else None
             cause, action = explanation(row) if row is not None and prediction else (None, None)
             target_stop = next((stop for stop in stops if row is not None and stop["id"] == str(row.target_stop_id)), None)
@@ -143,6 +156,7 @@ class Replay:
                 "stale": gps_age > 120,
                 "stops": nearby, "nextStop": next_stop,
                 "estimateSeconds": prediction["predicted_delay_s"] if prediction else None,
+                "currentDeviationSeconds": float(prior_row.cur_dev_s) if prior_row is not None else None,
                 "probability": prediction["probability_delay_over_120s"] if prediction else None,
                 "forecastTime": row.target_time_begin.isoformat() if row is not None else None,
                 "forecastStopId": str(row.target_stop_id) if row is not None else None,
@@ -150,7 +164,7 @@ class Replay:
                 "sampleId": str(row.sample_id) if row is not None else None,
                 "reason": cause, "recommendation": action,
                 "section": section if row is not None else None,
-                "source": "Исторический NDTP",
+                "source": self.source_name,
             })
         vehicles.sort(key=lambda item: (item["probability"] is None, -(item["probability"] or 0), item["id"]))
         return {"source": "historical-replay", "date": self.day.isoformat(),
@@ -165,6 +179,8 @@ async def lifespan(app: FastAPI):
     routed = Path(os.getenv("ROUTED_PATH", "data/processed_route"))
     prepare_data(dataset, processed, routed)
     app.state.replay = Replay(dataset, routed / "validate_features.parquet")
+    demo_archive, demo_features = generate_demo(Path(os.getenv("DEMO_PATH", "data/demo")))
+    app.state.demo = Replay(demo_archive, demo_features, "Синтетический учебный рейс")
     app.state.live = LiveStore()
     app.state.client = httpx.AsyncClient()
     app.state.ml_url = os.getenv("ML_URL", "http://127.0.0.1:8001").rstrip("/")
@@ -199,3 +215,8 @@ async def replay_snapshot(at: float = Query(ge=0, le=172800)) -> dict:
 @app.get("/api/live/snapshot")
 def live_snapshot() -> dict:
     return app.state.live.snapshot()
+
+
+@app.get("/api/demo/snapshot")
+async def demo_snapshot(at: float = Query(ge=0, le=172800)) -> dict:
+    return await app.state.demo.snapshot(at, app.state.ml_url, app.state.client)

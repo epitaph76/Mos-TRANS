@@ -18,3 +18,8 @@
   font-size: 13px;
   border-bottom: 1px solid #efd9a8;
 }
+.mode-picker { display:flex; align-items:center; gap:3px; padding:3px; border:1px solid #dce5f2; border-radius:9px; background:#f5f8fc; }
+.mode-picker button { border:0; border-radius:7px; padding:7px 10px; background:transparent; color:#526477; font:inherit; font-size:12px; font-weight:700; cursor:pointer; white-space:nowrap; }
+.mode-picker button.active { background:#1766ef; color:#fff; }
+.demo-banner { display:flex; gap:12px; align-items:center; padding:9px 18px; background:#eaf4ff; color:#234562; font-size:12px; border-bottom:1px solid #cfe3f9; }
+.demo-banner strong { white-space:nowrap; color:#1766ef; }
