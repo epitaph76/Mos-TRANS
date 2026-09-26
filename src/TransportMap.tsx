@@ -5,7 +5,7 @@ import { Crosshair, Layers3 } from 'lucide-react'
 import { type SharedNetwork } from './timeline'
 import 'maplibre-gl/dist/maplibre-gl.css'
 
-maplibregl.setWorkerUrl('/maplibre/maplibre-gl-worker.mjs')
+maplibregl.setWorkerUrl('/maplibre/maplibre-gl-worker.mjs?v=6.11.2-js-mime')
 
 type Vehicle = {
   id: string; position: [number, number]; heading: number | null;
