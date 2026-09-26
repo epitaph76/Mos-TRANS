@@ -32,7 +32,7 @@ type Vehicle = {
   gpsEventTime: string | null;
   positionMethod: 'gps' | 'route' | 'heading';
 }
-type View = 'map' | 'schedule' | 'routes' | 'vehicles' | 'events' | 'analytics'
+type View = 'map' | 'vehicles' | 'events' | 'analytics'
 type Filter = 'all' | 'normal' | 'deviation' | 'risk'
 type Status = 'normal' | 'minor' | 'delay' | 'critical' | 'early' | 'unknown'
 
@@ -208,23 +208,17 @@ function LiveDetail({ vehicle, onBack }: { vehicle: Vehicle; onBack: () => void 
 }
 
 function DataView({ view, vehicles, select }: { view: View; vehicles: Vehicle[]; select: (id: string) => void }) {
-  if (view === 'schedule') {
-    const rows = vehicles.filter(v => v.nextStop).sort((a, b) => (a.nextStop?.time || '').localeCompare(b.nextStop?.time || ''))
-    return <div className="data-view"><div className="data-intro"><h2>Ближайшие прибытия</h2><p>Плановое расписание для транспорта на линии</p></div><div className="data-table"><div className="table-header"><span>Время</span><span>Транспорт</span><span>Остановка</span><span>Состояние</span></div>{rows.map(v => <button key={v.id} className="table-row" onClick={() => select(v.id)}><strong>{timeOnly(v.nextStop!.time)}</strong><span>ТС {v.id}</span><span>{stopName(v.nextStop!.name)}</span><span className={`status-badge ${statusOf(v)}`}>{statusLabel[statusOf(v)]}</span></button>)}</div></div>
-  }
   if (view === 'analytics') {
     const tracked = vehicles.filter(v => v.estimateSeconds !== null)
     return <div className="data-view"><div className="data-intro"><h2>Аналитика движения</h2><p>Вероятность задержки более 2 минут на целевой остановке</p></div><div className="analytics-grid"><div className="analytic-tile"><span>На линии</span><strong>{vehicles.length}</strong><small>ТС с полученной телеметрией</small></div><div className="analytic-tile"><span>С прогнозом</span><strong>{tracked.length}</strong><small>Цель через 10–15 минут</small></div><div className="analytic-tile"><span>Высокий риск</span><strong>{tracked.filter(v => statusOf(v) === 'critical').length}</strong><small>Вероятность от 60%</small></div></div><h3 className="view-subtitle">Транспорт с прогнозом</h3><div className="data-table compact">{tracked.map(v => <button key={v.id} className="analytic-row" onClick={() => select(v.id)}><span className={`tiny-dot ${statusOf(v)}`} /> ТС {v.id}<strong>{Math.round((v.probability ?? 0) * 100)}% · {minutes(v.estimateSeconds)}</strong><ChevronRight size={17} /></button>)}</div></div>
   }
-  const title = view === 'routes' ? 'Маршрутная сеть' : view === 'events' ? 'События' : 'Транспорт на линии'
+  const title = view === 'events' ? 'События' : 'Транспорт на линии'
   const shown = view === 'events' ? vehicles.filter(v => ['minor', 'critical'].includes(statusOf(v))) : vehicles
-  return <div className="data-view"><div className="data-intro"><h2>{title}</h2><p>{view === 'routes' ? 'Траектории восстановлены по GPS-телеметрии' : view === 'events' ? 'Отклонения от расписания в выбранном срезе' : 'Текущие координаты и состояние транспорта'}</p></div><div className="list-grid">{shown.length ? shown.map(v => <button className="grid-row" key={v.id} onClick={() => select(v.id)}><span className={`row-icon ${statusOf(v)}`}><BusFront size={21} /></span><span><strong>ТС {v.id}</strong><small>{v.nextStop ? stopName(v.nextStop.name) : 'Без остановки'}</small></span><span className={`status-badge ${statusOf(v)}`}>{statusLabel[statusOf(v)]}</span><ChevronRight size={18} /></button>) : <div className="empty-state">В этом срезе событий нет</div>}</div></div>
+  return <div className="data-view"><div className="data-intro"><h2>{title}</h2><p>{view === 'events' ? 'Отклонения от расписания в выбранном срезе' : 'Текущие координаты и состояние транспорта'}</p></div><div className="list-grid">{shown.length ? shown.map(v => <button className="grid-row" key={v.id} onClick={() => select(v.id)}><span className={`row-icon ${statusOf(v)}`}><BusFront size={21} /></span><span><strong>ТС {v.id}</strong><small>{v.nextStop ? stopName(v.nextStop.name) : 'Без остановки'}</small></span><span className={`status-badge ${statusOf(v)}`}>{statusLabel[statusOf(v)]}</span><ChevronRight size={18} /></button>) : <div className="empty-state">В этом срезе событий нет</div>}</div></div>
 }
 
 const navItems: { id: View; label: string; icon: React.ElementType }[] = [
   { id: 'map', label: 'Карта', icon: MapIcon },
-  { id: 'schedule', label: 'Расписание', icon: CalendarDays },
-  { id: 'routes', label: 'Маршруты', icon: Route },
   { id: 'vehicles', label: 'Транспорт', icon: BusFront },
   { id: 'events', label: 'События', icon: AlertTriangle },
   { id: 'analytics', label: 'Аналитика', icon: BarChart3 },
