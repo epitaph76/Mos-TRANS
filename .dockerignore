@@ -1,0 +1,14 @@
+.git
+.venv
+node_modules
+dist
+data
+__pycache__
+*.pyc
+artifacts/*
+!artifacts/route_delay_trend_submission/
+!artifacts/calibrated_probability/
+artifacts/route_delay_trend_submission/*
+!artifacts/route_delay_trend_submission/catboost_residual_final.cbm
+artifacts/calibrated_probability/*
+!artifacts/calibrated_probability/model.joblib

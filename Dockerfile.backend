@@ -1,0 +1,7 @@
+FROM python:3.12-slim
+WORKDIR /app
+COPY requirements-preprocessing.txt requirements-catboost.txt requirements-service.txt ./
+RUN pip install --no-cache-dir -r requirements-service.txt
+COPY mos_trans ./mos_trans
+EXPOSE 8000 9201
+CMD ["uvicorn", "mos_trans.backend_api:app", "--host", "0.0.0.0", "--port", "8000"]

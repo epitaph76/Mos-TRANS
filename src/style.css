@@ -11,3 +11,10 @@
 @media(max-width:650px){.restore-monitor span{display:none}.restore-monitor{padding:0 9px}.topbar-actions{gap:6px}.time-select{min-width:118px}.date-chip{padding:0 8px;font-size:10px}}
 .vector-map{position:absolute;inset:0;z-index:1;background:#f8f4f0}.maplibregl-map{font-family:Manrope,Arial,sans-serif}.maplibregl-control-container .maplibregl-ctrl-attrib{font-size:9px;background:#ffffffb8}.map-wrap .map-top-note,.map-wrap .map-tools,.map-wrap .map-legend{z-index:4}.map-zoom{position:absolute;left:16px;bottom:57px;z-index:4;display:flex;flex-direction:column;background:#fff;box-shadow:0 3px 15px #1f3e6040;border-radius:5px;overflow:hidden}.map-zoom button{width:34px;height:35px;display:grid;place-items:center;color:#1c4d9f;background:#fff}.map-zoom button+button{border-top:1px solid #e8edf4}.map-zoom button:hover{background:#edf4ff}.map-bus-marker{width:30px;height:40px;padding:0;background:transparent;border:0;cursor:pointer;z-index:3;transition:opacity .15s}.map-bus-marker.dimmed{opacity:.35}.map-bus-marker.selected{z-index:5}.map-bus-marker .vehicle-capsule{position:absolute;left:6px;top:5px}.map-bus-marker.normal .vehicle-capsule{background:#16b77c}.map-bus-marker.minor .vehicle-capsule{background:#e6a619}.map-bus-marker.delay .vehicle-capsule{background:#fa7c3e}.map-bus-marker.critical .vehicle-capsule{background:#ed4255}.map-bus-marker.early .vehicle-capsule{background:#4188e9}.map-bus-marker.selected .vehicle-capsule{transform:rotate(var(--heading)) scale(1.17);box-shadow:0 0 0 4px #1264e929,0 2px 7px #142e6055}.restore-monitor{position:absolute;z-index:8;top:29px;right:30px;width:32px;height:32px;padding:0;display:grid;place-items:center;background:#f5f8fc;color:#6c80a0;border:0;border-radius:6px;box-shadow:0 2px 9px #263c5b22}.restore-monitor:hover{background:#eaf2ff;color:#1766ef}.topbar h1{margin:0}.map-wrap{position:relative}
 @media(max-width:650px){.restore-monitor{top:25px;right:23px}.map-zoom{left:11px;bottom:60px}}
+ .service-banner {
+  padding: 8px 18px;
+  background: #fff1d6;
+  color: #7b4700;
+  font-size: 13px;
+  border-bottom: 1px solid #efd9a8;
+}

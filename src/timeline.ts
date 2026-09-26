@@ -78,7 +78,7 @@ export function stopSeconds(value: string, day: string) {
 export function forecastAt(points: TimelineForecast[], time: number, day: string) {
   return points.find(point => {
     const horizon = stopSeconds(point.forecastTime, day) - time
-    return point.time <= time && time - point.time < 60 && horizon >= 600 && horizon <= 900
+    return point.time <= time && time - point.time < 60 && horizon > 600 && horizon <= 900
   })
 }
 
@@ -97,21 +97,12 @@ export function positionAt(track: TrackPoint[], time: number) {
   const index = precedingIndex(track, time)
   if (index < 0) return null
   const previous = track[index]
-  const next = track[index + 1]
   const age = time - previous[0]
   if (age > 180) return null
-  if (!next || next[0] - previous[0] > 180) {
-    return { position: [previous[1], previous[2]] as [number, number], point: previous, age, heading: previous[4] }
-  }
-  const fraction = Math.max(0, Math.min(1, age / (next[0] - previous[0])))
-  const dx = (next[2] - previous[2]) * Math.cos(previous[1] * Math.PI / 180)
-  const dy = next[1] - previous[1]
-  const heading = Math.abs(dx) + Math.abs(dy) > 0.00001 ? (Math.atan2(dx, dy) * 180 / Math.PI + 360) % 360 : previous[4]
   return {
-    position: [previous[1] + (next[1] - previous[1]) * fraction,
-      previous[2] + (next[2] - previous[2]) * fraction] as [number, number],
+    position: [previous[1], previous[2]] as [number, number],
     point: previous,
     age,
-    heading,
+    heading: previous[4],
   }
 }

@@ -1,0 +1,39 @@
+services:
+  ml:
+    build:
+      context: .
+      dockerfile: Dockerfile.ml
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    environment:
+      DATASET_PATH: /data/dataset.zip
+      PROCESSED_PATH: /cache/processed
+      ROUTED_PATH: /cache/processed_route
+      ML_URL: http://ml:8001
+      NDTP_PORT: "9201"
+    volumes:
+      - ${DATASET_HOST_PATH:-./data/dataset.zip}:/data/dataset.zip:ro
+      - processed:/cache
+    ports:
+      - "8000:8000"
+      - "9201:9201"
+    depends_on:
+      - ml
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  processed:

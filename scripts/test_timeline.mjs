@@ -8,12 +8,10 @@ const { outputText } = ts.transpileModule(source, { compilerOptions: { target: t
 const { positionAt, formatTime, stopSeconds, forecastAt, indexNetwork, snapToNetwork } = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString('base64')}`)
 const track = [[10, 55, 37, 20, 0], [30, 55.002, 37.004, 25, 90], [600, 56, 38, 0, null]]
 
-test('positions are bounded by observed fixes and interpolate short gaps', () => {
+test('positions use only observed fixes, never the next GPS packet', () => {
   assert.equal(positionAt(track, 9), null)
   assert.deepEqual(positionAt(track, 10).position, [55, 37])
-  const midpoint = positionAt(track, 20).position
-  assert(Math.abs(midpoint[0] - 55.001) < 1e-10)
-  assert(Math.abs(midpoint[1] - 37.002) < 1e-10)
+  assert.deepEqual(positionAt(track, 20).position, [55, 37])
   assert.deepEqual(positionAt(track, 30).position, [55.002, 37.004])
 })
 
@@ -39,14 +37,13 @@ test('forecast uses no future point and stays within a 10–15 minute horizon', 
   assert.equal(forecastAt([{ ...points[0], forecastTime: '2026-01-06 11:50:00' }], 42001, '2026-01-06'), undefined)
 })
 
-test('generated timeline spans every cleaned real track with strictly ordered fixes', () => {
-  const data = JSON.parse(readFileSync(new URL('../src/data/timeline.json', import.meta.url), 'utf8'))
-  assert.equal(data.start, Math.min(...data.vehicles.map(vehicle => vehicle.track[0][0])))
-  assert.equal(data.end, Math.max(...data.vehicles.map(vehicle => vehicle.track.at(-1)[0])))
-  assert.equal(data.start, 2)
+test('browser asset contains planned stops and no future GPS track', () => {
+  const data = JSON.parse(readFileSync(new URL('../src/data/plan.json', import.meta.url), 'utf8'))
+  assert(data.start > 0)
+  assert(data.end > data.start)
   for (const vehicle of data.vehicles) {
-    assert(vehicle.track.every((point, index) => index === 0 || point[0] > vehicle.track[index - 1][0]))
-    assert(positionAt(vehicle.track, vehicle.track[0][0]))
+    assert(!('track' in vehicle))
+    assert(vehicle.stops.every((stop, index) => index === 0 || stop.time >= vehicle.stops[index - 1].time))
   }
   assert(data.network.nodes.length > 0)
   assert(data.network.edges.length > 0)

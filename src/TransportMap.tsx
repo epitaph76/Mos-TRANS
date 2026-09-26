@@ -9,7 +9,7 @@ maplibregl.setWorkerUrl('/maplibre/maplibre-gl-worker.mjs')
 
 type Vehicle = {
   id: string; position: [number, number]; heading: number | null;
-  estimateSeconds: number | null
+  estimateSeconds: number | null; probability: number | null
 }
 type Status = 'normal' | 'minor' | 'delay' | 'critical' | 'early' | 'unknown'
 type Props = {
@@ -121,8 +121,8 @@ export default function TransportMap({ vehicles, selected, selectedId, selectedS
       }
       marker.setLngLat([vehicle.position[1], vehicle.position[0]])
       const element = marker.getElement()
-      const seconds = vehicle.estimateSeconds
-      const status = seconds === null ? 'unknown' : seconds < -120 ? 'early' : seconds <= 60 ? 'normal' : seconds <= 120 ? 'minor' : seconds <= 300 ? 'delay' : 'critical'
+      const probability = vehicle.probability
+      const status = probability === null ? 'unknown' : probability >= 0.6 ? 'critical' : probability >= 0.3 ? 'minor' : 'normal'
       element.classList.add('map-bus-marker')
       element.classList.remove('normal', 'minor', 'delay', 'critical', 'early', 'unknown', 'selected', 'dimmed')
       element.classList.add(status)
