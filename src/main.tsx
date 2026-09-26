@@ -23,7 +23,10 @@ type Vehicle = {
   reason: string | null; recommendation: string | null; section: string | null;
   source: string; doorStatus: string | null;
   currentDeviationSeconds: number | null;
-  forecastAvailability: 'ready' | 'no_point' | 'ml_unavailable' | 'pending';
+  meanSpeed5m: number | null; segmentSpeedMeanKmh: number | null;
+  stoppedDurationSeconds: number | null;
+  forecastAvailability: 'ready' | 'no_point' | 'no_target' | 'bad_gps' | 'off_route' | 'late_packet' | 'stale_gps' | 'ml_unavailable' | 'pending';
+  forecastGeneratedAt: string | null; forecastPacketId: string | null;
   nearestForecastPointAt: string | null;
   nearestForecastPointDirection: 'next' | 'previous' | null;
   gpsEventTime: string | null;
@@ -53,7 +56,12 @@ function normalizeVehicle(value: Partial<Vehicle> & { id: string; position?: [nu
     recommendation: value.recommendation ?? null, section: value.section ?? null,
     source: value.source ?? 'NDTP', doorStatus: value.doorStatus ?? null,
     currentDeviationSeconds: value.currentDeviationSeconds ?? null,
+    meanSpeed5m: value.meanSpeed5m ?? null,
+    segmentSpeedMeanKmh: value.segmentSpeedMeanKmh ?? null,
+    stoppedDurationSeconds: value.stoppedDurationSeconds ?? null,
     forecastAvailability: value.forecastAvailability ?? 'no_point',
+    forecastGeneratedAt: value.forecastGeneratedAt ?? null,
+    forecastPacketId: value.forecastPacketId ?? null,
     nearestForecastPointAt: value.nearestForecastPointAt ?? null,
     nearestForecastPointDirection: value.nearestForecastPointDirection ?? null,
     gpsEventTime: value.gpsEventTime ?? null, positionMethod: 'gps',
@@ -108,6 +116,16 @@ function VehicleDetail({ vehicle, time, day, demo, onBack, onJumpToForecast }: {
     ? 'Прогнозная точка есть, но ML-сервис сейчас недоступен.'
     : vehicle.forecastAvailability === 'pending'
       ? 'Прогнозная точка есть, ответ модели пока не получен.'
+      : vehicle.forecastAvailability === 'no_target'
+        ? 'По расписанию нет остановки через 10–15 минут.'
+        : vehicle.forecastAvailability === 'bad_gps'
+          ? 'Нет свежей достоверной координаты для расчёта прогноза.'
+          : vehicle.forecastAvailability === 'off_route'
+            ? 'GPS не удалось надёжно сопоставить с плановым маршрутом.'
+            : vehicle.forecastAvailability === 'late_packet'
+              ? 'Получен запоздавший пакет; ожидается новая координата.'
+            : vehicle.forecastAvailability === 'stale_gps'
+              ? 'Новых GPS-пакетов не поступало более двух минут.'
       : vehicle.nearestForecastPointAt
         ? `В ${formatTime(time)} для этого ТС нет прогнозной точки. Ближайшая ${vehicle.nearestForecastPointDirection === 'next' ? 'следующая' : 'предыдущая'} — в ${nearestPointLabel}. Исторический датасет размечен отдельными срезами.`
         : 'Для этого ТС в архиве нет прогнозных точек.'
@@ -159,9 +177,9 @@ function VehicleDetail({ vehicle, time, day, demo, onBack, onJumpToForecast }: {
       }) : <p className="empty-stop-events">Нет плановых остановок для выбранного времени.</p>}</div>
     </div>}
     {tab === 'analytics' && <div className="detail-tab-content" role="tabpanel">
-      <div className="prediction-block"><span className="eyebrow">Прогноз на 10–15 минут</span><strong className={status}>{minutes(vehicle.estimateSeconds)}</strong><p>{vehicle.probability === null ? unavailableReason : `Вероятность опоздания более чем на 2 минуты: ${Math.round(vehicle.probability * 100)}%.`}</p>{vehicle.probability === null && vehicle.forecastAvailability === 'no_point' && vehicle.nearestForecastPointAt && <button className="forecast-jump" onClick={() => onJumpToForecast(stopSeconds(vehicle.nearestForecastPointAt!, day))}>Перейти к точке {nearestPointLabel}</button>}</div>
+      <div className="prediction-block"><span className="eyebrow">Прогноз на 10–15 минут</span><strong className={status}>{minutes(vehicle.estimateSeconds)}</strong><p>{vehicle.probability === null ? unavailableReason : `Вероятность опоздания более чем на 2 минуты: ${Math.round(vehicle.probability * 100)}%.`}</p>{vehicle.probability !== null && vehicle.forecastGeneratedAt && <p>Обновлено по GPS в {timeOnly(vehicle.forecastGeneratedAt)}</p>}{vehicle.probability === null && vehicle.forecastAvailability === 'no_point' && vehicle.nearestForecastPointAt && <button className="forecast-jump" onClick={() => onJumpToForecast(stopSeconds(vehicle.nearestForecastPointAt!, day))}>Перейти к точке {nearestPointLabel}</button>}</div>
       {vehicle.probability !== null && <div className="detail-section"><h3>Карточка риска</h3><div className="metric-line"><span>Целевая остановка</span><strong>{vehicle.forecastStop ? stopName(vehicle.forecastStop.name) : vehicle.forecastStopId}</strong></div><div className="metric-line"><span>Плановое прибытие</span><strong>{timeOnly(vehicle.forecastTime)}</strong></div><div className="metric-line"><span>Участок маршрута</span><strong>{vehicle.section ?? 'Участок не определён'}</strong></div><div className="metric-line"><span>Предполагаемая причина</span><strong>{vehicle.reason ?? 'Причина не определена'}</strong></div><div className="metric-line"><span>Действие</span><strong>{vehicle.recommendation ?? 'Наблюдать'}</strong></div></div>}
-      <div className="detail-section"><h3>Показатели движения</h3><div className="metric-line"><span>Скорость</span><strong>{vehicle.speed} км/ч</strong></div><div className="metric-line"><span>Текущее отклонение</span><strong>{minutes(vehicle.currentDeviationSeconds)}</strong></div><div className="metric-line"><span>Прогноз отклонения</span><strong>{minutes(vehicle.estimateSeconds)}</strong></div></div>
+      <div className="detail-section"><h3>Показатели движения</h3><div className="metric-line"><span>Скорость</span><strong>{vehicle.speed} км/ч</strong></div><div className="metric-line"><span>Средняя скорость за 5 минут</span><strong>{vehicle.meanSpeed5m === null ? '—' : `${Math.round(vehicle.meanSpeed5m)} км/ч`}</strong></div><div className="metric-line"><span>Средняя скорость на участке</span><strong>{vehicle.segmentSpeedMeanKmh === null ? '—' : `${Math.round(vehicle.segmentSpeedMeanKmh)} км/ч`}</strong></div><div className="metric-line"><span>Текущий простой</span><strong>{vehicle.stoppedDurationSeconds === null ? '—' : `${Math.round(vehicle.stoppedDurationSeconds)} с`}</strong></div><div className="metric-line"><span>Текущее отклонение</span><strong>{minutes(vehicle.currentDeviationSeconds)}</strong></div><div className="metric-line"><span>Прогноз отклонения</span><strong>{minutes(vehicle.estimateSeconds)}</strong></div></div>
     </div>}
     {tab === 'details' && <div className="detail-tab-content" role="tabpanel">
       <div className="detail-section"><h3>Телеметрия</h3><div className="metric-line"><span>Последний GPS</span><strong>{vehicle.gpsAgeMin < 1 ? 'менее минуты назад' : `${Math.round(vehicle.gpsAgeMin)} мин назад`}</strong></div><div className="metric-line"><span>Положение на карте</span><strong>{vehicle.positionMethod === 'route' ? 'Расчёт по маршруту и последней скорости' : vehicle.positionMethod === 'heading' ? 'Расчёт по курсу и последней скорости' : 'Последний полученный GPS'}</strong></div><div className="metric-line"><span>Двери</span><strong>{vehicle.doorStatus ?? 'Нет данных в историческом CSV'}</strong></div></div>

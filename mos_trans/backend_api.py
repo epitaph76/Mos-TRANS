@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 from bisect import bisect_right
 from collections import defaultdict
@@ -19,6 +20,7 @@ from mos_trans.demo import generate as generate_demo
 from mos_trans.inference import FORBIDDEN, json_records
 from mos_trans.ndtp import LiveStore
 from mos_trans.preprocessing.core import DataSource, _point, _time, build_dataset, clean_traffic_row
+from mos_trans.stream_forecast import STREAM_VERSION, build_stream_features
 
 
 def prepare_data(dataset: Path, processed: Path, routed: Path) -> None:
@@ -26,6 +28,15 @@ def prepare_data(dataset: Path, processed: Path, routed: Path) -> None:
         build_dataset(dataset, processed)
     if not (routed / "validate_features.parquet").exists():
         build_feature_set(processed, routed, dataset)
+    summary_path = routed / "stream" / "stream_summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8")) if summary_path.exists() else {}
+    source = dataset.stat()
+    if (summary.get("version") != STREAM_VERSION
+            or summary.get("source_size") != source.st_size
+            or summary.get("source_mtime_ns") != source.st_mtime_ns
+            or not (routed / "stream" / "stream_features.parquet").exists()
+            or not (routed / "stream" / "stream_status.parquet").exists()):
+        build_stream_features(dataset, routed / "stream")
 
 
 def explanation(row: pd.Series) -> tuple[str, str]:
@@ -72,7 +83,8 @@ def next_observed_stop(stops: list[dict], packet) -> tuple[dict | None, dict | N
 
 class Replay:
     def __init__(self, dataset: Path, features_path: Path,
-                 source_name: str = "Исторический NDTP", full_route: bool = False):
+                 source_name: str = "Исторический NDTP", full_route: bool = False,
+                 status_path: Path | None = None):
         self.source_name = source_name
         self.full_route = full_route
         self.rows = pd.read_parquet(features_path).drop(columns=list(FORBIDDEN), errors="ignore")
@@ -86,6 +98,15 @@ class Replay:
             self.row_times[str(vehicle)] = group["T"].tolist()
             self.vehicle_rows[str(vehicle)] = list(group.itertuples(index=False))
         self.predictions: dict[str, dict] = {}
+        self.stream = status_path is not None
+        self.status_times: dict[str, list[datetime]] = {}
+        self.status_rows: dict[str, list] = {}
+        if status_path is not None:
+            status_frame = pd.read_parquet(status_path).sort_values(
+                ["available_time", "event_time", "packet_id"], kind="stable")
+            for vehicle, group in status_frame.groupby("tr_id", sort=False):
+                self.status_times[str(vehicle)] = group.available_time.tolist()
+                self.status_rows[str(vehicle)] = list(group.itertuples(index=False))
         self.stops: dict[str, list[dict]] = defaultdict(list)
         self.gps: dict[str, tuple[list[datetime], list]] = {}
         source = DataSource(dataset)
@@ -122,6 +143,18 @@ class Replay:
         self.day = self.ordered.iloc[0]["T"].date()
 
     def active_rows(self, at: datetime) -> pd.DataFrame:
+        if self.stream:
+            ids = []
+            for vehicle, times in self.status_times.items():
+                position = bisect_right(times, at) - 1
+                if position >= 0:
+                    row = self.status_rows[vehicle][position]
+                    if (row.availability == "ready"
+                            and (at - row.available_time).total_seconds() <= 120):
+                        ids.append(str(row.sample_id))
+            if not ids:
+                return self.rows.iloc[:0]
+            return pd.DataFrame([self.rows_by_id[sample_id] for sample_id in ids])
         mask = (self.ordered["T"] <= at) & (self.ordered["T"] > at - timedelta(seconds=60))
         active = self.ordered.loc[mask]
         horizon = (active["target_time_begin"] - active["T"]).dt.total_seconds()
@@ -149,6 +182,28 @@ class Replay:
         except (httpx.HTTPError, KeyError, ValueError):
             return "unavailable"
 
+    async def score_all(self, ml_url: str, client: httpx.AsyncClient) -> None:
+        """Score every eligible received fix in bounded ML batches."""
+        if not self.stream:
+            return
+        for start in range(0, len(self.ordered), 256):
+            chunk = self.ordered.iloc[start:start + 256]
+            while True:
+                missing = chunk.loc[~chunk.sample_id.astype(str).isin(self.predictions)]
+                if missing.empty:
+                    break
+                try:
+                    response = await client.post(f"{ml_url}/predict",
+                                                 json={"features": json_records(missing)},
+                                                 timeout=30.0)
+                    response.raise_for_status()
+                    for item in response.json()["predictions"]:
+                        self.predictions[str(item["sample_id"])] = item
+                    break
+                except (httpx.HTTPError, KeyError, ValueError):
+                    await asyncio.sleep(3)
+            await asyncio.sleep(0)
+
     async def snapshot(self, at_seconds: float, ml_url: str, client: httpx.AsyncClient) -> dict:
         at = datetime.combine(self.day, datetime.min.time()) + timedelta(seconds=at_seconds)
         active = self.active_rows(at)
@@ -170,6 +225,12 @@ class Replay:
                 previous_stop = stops[stop_index - 1] if stop_index else None
             section = (f"{stop_label(previous_stop)} → {stop_label(next_stop)}"
                        if previous_stop is not None and next_stop is not None else None)
+            stream_status = None
+            if self.stream:
+                status_times = self.status_times.get(vehicle, [])
+                status_index = bisect_right(status_times, at) - 1
+                if status_index >= 0:
+                    stream_status = self.status_rows[vehicle][status_index]
             row = active_by_vehicle.get(vehicle)
             prior_times = self.row_times.get(vehicle, [])
             prior_index = bisect_right(prior_times, at) - 1
@@ -183,8 +244,15 @@ class Replay:
             point_direction = ("next" if next_forecast_index < len(prior_times)
                                else "previous" if prior_times else None)
             forecast_availability = ("ready" if prediction else
-                                     "ml_unavailable" if row is not None and model_status == "unavailable" else
-                                     "pending" if row is not None else "no_point")
+                                      "ml_unavailable" if row is not None and model_status == "unavailable" else
+                                      "pending" if row is not None else
+                                      stream_status.availability if stream_status is not None else "no_point")
+            if self.stream:
+                if (stream_status is not None and stream_status.availability == "ready"
+                        and (at - stream_status.available_time).total_seconds() > 120):
+                    forecast_availability = "stale_gps"
+                nearest_point = None
+                point_direction = None
             cause, action = explanation(row) if row is not None and prediction else (None, None)
             target_stop = next((stop for stop in stops if row is not None and stop["id"] == str(row.target_stop_id)), None)
             vehicles.append({
@@ -195,12 +263,29 @@ class Replay:
                 "stale": gps_age > 120,
                 "stops": nearby, "nextStop": next_stop,
                 "estimateSeconds": prediction["predicted_delay_s"] if prediction else None,
-                "currentDeviationSeconds": float(prior_row.cur_dev_s) if prior_row is not None else None,
+                "currentDeviationSeconds": (
+                    float(stream_status.estimated_cur_dev_s)
+                    if self.stream and stream_status is not None
+                    and pd.notna(stream_status.estimated_cur_dev_s) else
+                    float(prior_row.cur_dev_s) if prior_row is not None and not self.stream else None),
+                "meanSpeed5m": (float(stream_status.mean_speed_5m)
+                                 if stream_status is not None and pd.notna(stream_status.mean_speed_5m)
+                                 else None),
+                "segmentSpeedMeanKmh": (
+                    float(stream_status.segment_speed_mean_kmh)
+                    if stream_status is not None and pd.notna(stream_status.segment_speed_mean_kmh)
+                    else None),
+                "stoppedDurationSeconds": (float(stream_status.stopped_duration_s)
+                                           if stream_status is not None else None),
                 "probability": prediction["probability_delay_over_120s"] if prediction else None,
                 "forecastTime": row.target_time_begin.isoformat() if row is not None else None,
                 "forecastStopId": str(row.target_stop_id) if row is not None else None,
                 "forecastStop": target_stop,
                 "sampleId": str(row.sample_id) if row is not None else None,
+                "forecastGeneratedAt": (stream_status.available_time.isoformat()
+                                        if stream_status is not None else None),
+                "forecastPacketId": (str(stream_status.packet_id)
+                                     if stream_status is not None else None),
                 "forecastAvailability": forecast_availability,
                 "nearestForecastPointAt": nearest_point.isoformat() if nearest_point is not None else None,
                 "nearestForecastPointDirection": point_direction,
@@ -220,18 +305,25 @@ async def lifespan(app: FastAPI):
     processed = Path(os.getenv("PROCESSED_PATH", "data/processed"))
     routed = Path(os.getenv("ROUTED_PATH", "data/processed_route"))
     prepare_data(dataset, processed, routed)
-    app.state.replay = Replay(dataset, routed / "validate_features.parquet")
+    app.state.replay = Replay(dataset, routed / "stream" / "stream_features.parquet",
+                              status_path=routed / "stream" / "stream_status.parquet")
     demo_archive, demo_features = generate_demo(Path(os.getenv("DEMO_PATH", "data/demo")))
     app.state.demo = Replay(demo_archive, demo_features, "Синтетический учебный рейс", full_route=True)
     app.state.live = LiveStore()
     app.state.client = httpx.AsyncClient()
     app.state.ml_url = os.getenv("ML_URL", "http://127.0.0.1:8001").rstrip("/")
+    scorer = asyncio.create_task(app.state.replay.score_all(app.state.ml_url, app.state.client))
     server = await asyncio.start_server(app.state.live.handle, host="0.0.0.0",
                                         port=int(os.getenv("NDTP_PORT", "9201")))
     app.state.ndtp_server = server
     try:
         yield
     finally:
+        scorer.cancel()
+        try:
+            await scorer
+        except asyncio.CancelledError:
+            pass
         server.close()
         await server.wait_closed()
         await app.state.client.aclose()
@@ -243,7 +335,9 @@ app = FastAPI(title="Mos-TRANS Dispatcher", version="1.0.0", lifespan=lifespan)
 @app.get("/api/health")
 def health() -> dict:
     return {"status": "ready", "ndtpConnections": app.state.live.connections,
-            "ndtpFrames": app.state.live.frames, "ndtpErrors": app.state.live.errors}
+            "ndtpFrames": app.state.live.frames, "ndtpErrors": app.state.live.errors,
+            "historicalForecastRequests": len(app.state.replay.rows),
+            "historicalForecastsReady": len(app.state.replay.predictions)}
 
 
 @app.get("/api/replay/snapshot")
