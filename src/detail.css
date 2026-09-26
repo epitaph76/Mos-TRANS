@@ -1,0 +1,49 @@
+.detail-pane{padding:0;overflow:auto}
+.inactive-route-pane{padding:18px 19px 22px}
+.inactive-route-pane>.back-button{margin:0 0 27px}
+.detail-pane>.back-button{margin:14px 17px 12px}
+.vehicle-card-heading{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:13px 17px 15px;border-bottom:1px dashed #e7edf4}
+.vehicle-card-title{display:flex;align-items:center;gap:11px;min-width:0}
+.vehicle-card-title .detail-bus{width:42px;height:42px;flex:none}
+.vehicle-card-title h2{margin:0;color:#172847;font-size:17px;line-height:1.25}
+.vehicle-card-title .detail-kicker{display:block;margin-top:4px;font-size:9px}
+.vehicle-card-heading .detail-status{margin:0;white-space:nowrap;padding:6px 8px;font-size:9px}
+.vehicle-meta-grid{display:grid;grid-template-columns:1.25fr .75fr .9fr;gap:8px;padding:13px 17px 15px;border-bottom:1px solid #e9eef5}
+.vehicle-meta-grid>div{min-width:0}
+.vehicle-meta-grid span{display:block;color:#8b9bb0;font-size:9px;line-height:1.35;min-height:23px}
+.vehicle-meta-grid strong{display:block;color:#243958;font-size:10px;line-height:1.4;overflow-wrap:anywhere}
+.detail-tabs{display:flex;border-bottom:1px solid #e6ecf3}
+.detail-tabs button{position:relative;flex:1;min-width:0;height:43px;background:#fff;color:#8999ae;font-size:10px;font-weight:700}
+.detail-tabs button:hover{color:#1766ef;background:#f9fbfe}
+.detail-tabs button.active{color:#1766ef}
+.detail-tabs button.active:after{position:absolute;content:"";height:2px;left:0;right:0;bottom:-1px;background:#1766ef}
+.detail-tab-content{padding:16px 16px 22px}
+.tracking-heading{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:19px}
+.tracking-heading strong{font-size:11px;color:#253854}
+.tracking-heading span{font-size:10px;color:#7589a5;font-variant-numeric:tabular-nums}
+.tracking-ruler{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));position:relative;color:#94a3b8;font-size:8px;font-variant-numeric:tabular-nums}
+.tracking-ruler>span{text-align:center;white-space:nowrap}
+.tracking-ruler>span:first-child{text-align:left}
+.tracking-ruler>span:last-of-type{text-align:right}
+.tracking-ruler .tracking-now{color:#1766ef;font-weight:800}
+.tracking-track{height:32px;grid-column:1/-1;position:relative;margin:9px 0 23px;background:repeating-linear-gradient(90deg,#f2f5f9 0,#f2f5f9 calc(25% - 1px),#e8edf4 calc(25% - 1px),#e8edf4 25%);border-radius:3px}
+.tracking-track i{position:absolute;top:0;height:100%;width:5px;border-radius:2px;transform:translateX(-50%)}
+.tracking-track .tracking-current{left:50%;width:2px;background:#1766ef;z-index:2}
+.tracking-track .tracking-stop{background:#e6a619;box-shadow:0 0 0 1px #fff;z-index:1}
+.next-stop-feature{display:flex;align-items:flex-start;gap:10px;padding:10px 0 13px;color:#1766ef;border-bottom:1px solid #edf1f6}
+.next-stop-feature div{min-width:0}
+.next-stop-feature span,.next-stop-feature small{display:block;color:#8b9bb0;font-size:9px}
+.next-stop-feature strong{display:block;margin:4px 0;color:#253854;font-size:11px;line-height:1.4}
+.stop-event-list{padding-top:5px}
+.stop-event{display:grid;grid-template-columns:8px 38px minmax(0,1fr);align-items:center;gap:8px;min-height:37px;position:relative;color:#283b58}
+.stop-event:not(:last-child):before{content:"";position:absolute;left:3px;top:23px;bottom:-14px;width:1px;background:#e5ebf3}
+.stop-event-dot{width:7px;height:7px;border-radius:50%;background:#e6a619;border:1px solid #fff;box-shadow:0 0 0 1px #e6a619;z-index:1}
+.stop-event-dot.past{background:#1766ef;box-shadow:0 0 0 1px #1766ef}
+.stop-event time{font-size:9px;color:#8596ad;font-variant-numeric:tabular-nums}
+.stop-event>span:nth-of-type(2){font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.stop-event small{grid-column:3;color:#9aa9bc;font-size:8px;margin-top:-6px}
+.empty-stop-events{margin:0;padding:15px 0;color:#8b9bb0;font-size:10px;line-height:1.5}
+.detail-tab-content .prediction-block{margin:0 0 7px}
+.detail-tab-content .detail-section{padding:15px 0}
+.detail-tab-content .detail-section:last-child{border-bottom:0}
+@media(max-width:650px){.vehicle-meta-grid{padding-left:13px;padding-right:13px;gap:6px}.vehicle-card-heading{padding-left:13px;padding-right:13px}.detail-tabs button{height:40px}}

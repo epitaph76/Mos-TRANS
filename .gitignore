@@ -9,3 +9,8 @@ __pycache__/
 
 # Локальные настройки
 .env
+
+# BI dashboard (Vite)
+node_modules/
+dist/
+*.tsbuildinfo
