@@ -26,10 +26,13 @@
 .tracking-ruler>span:first-child{text-align:left}
 .tracking-ruler>span:last-of-type{text-align:right}
 .tracking-ruler .tracking-now{color:#1766ef;font-weight:800}
-.tracking-track{height:32px;grid-column:1/-1;position:relative;margin:9px 0 23px;background:repeating-linear-gradient(90deg,#f2f5f9 0,#f2f5f9 calc(25% - 1px),#e8edf4 calc(25% - 1px),#e8edf4 25%);border-radius:3px}
-.tracking-track i{position:absolute;top:0;height:100%;width:5px;border-radius:2px;transform:translateX(-50%)}
-.tracking-track .tracking-current{left:50%;width:2px;background:#1766ef;z-index:2}
-.tracking-track .tracking-stop{background:#e6a619;box-shadow:0 0 0 1px #fff;z-index:1}
+.tracking-track{height:32px;grid-column:1/-1;position:relative;margin:9px 0 23px;background:linear-gradient(#dce5f2,#dce5f2) center/100% 3px no-repeat}
+.tracking-track i{position:absolute;transform:translateX(-50%)}
+.tracking-track .tracking-current{top:0;height:100%;left:50%;width:2px;background:#1766ef;z-index:2}
+.tracking-track .tracking-stop{top:11px;width:10px;height:10px;border-radius:50%;background:#e6a619;box-shadow:0 0 0 2px #fff;z-index:1}
+.tracking-track .tracking-stop.reached{background:#1766ef}
+.tracking-track .tracking-stop.overdue{background:#ed4255}
+.tracking-legend{margin:-9px 0 8px;color:#70839e;font-size:9px;line-height:1.4}
 .next-stop-feature{display:flex;align-items:flex-start;gap:10px;padding:10px 0 13px;color:#1766ef;border-bottom:1px solid #edf1f6}
 .next-stop-feature div{min-width:0}
 .next-stop-feature span,.next-stop-feature small{display:block;color:#8b9bb0;font-size:9px}
@@ -39,6 +42,8 @@
 .stop-event:not(:last-child):before{content:"";position:absolute;left:3px;top:23px;bottom:-14px;width:1px;background:#e5ebf3}
 .stop-event-dot{width:7px;height:7px;border-radius:50%;background:#e6a619;border:1px solid #fff;box-shadow:0 0 0 1px #e6a619;z-index:1}
 .stop-event-dot.past{background:#1766ef;box-shadow:0 0 0 1px #1766ef}
+.stop-event-dot.overdue{background:#ed4255;box-shadow:0 0 0 1px #ed4255}
+.stop-event.schedule-gap{margin-top:10px;border-top:1px dashed #cbd6e5;padding-top:8px}
 .stop-event time{font-size:9px;color:#8596ad;font-variant-numeric:tabular-nums}
 .stop-event>span:nth-of-type(2){font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .stop-event small{grid-column:3;color:#9aa9bc;font-size:8px;margin-top:-6px}

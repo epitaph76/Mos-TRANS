@@ -48,10 +48,33 @@ def stop_label(stop: dict) -> str:
     return stop["name"] if stop["name"] != "Остановка" else f"ост. {stop['id']}"
 
 
+def next_observed_stop(stops: list[dict], packet) -> tuple[dict | None, dict | None]:
+    """Find the next stop from the received GPS fix on the demo corridor."""
+    if len(stops) < 2:
+        return None, None
+    best = (float("inf"), 0, 0.0)
+    scale = 0.56
+    for index, (start, end) in enumerate(zip(stops, stops[1:])):
+        dx = (end["lon"] - start["lon"]) * scale
+        dy = end["lat"] - start["lat"]
+        length = dx * dx + dy * dy
+        fraction = max(0.0, min(1.0, (((packet.lon - start["lon"]) * scale * dx)
+                                            + (packet.lat - start["lat"]) * dy) / length)) if length else 0.0
+        distance = ((packet.lon - start["lon"]) * scale - fraction * dx) ** 2 + (
+            packet.lat - start["lat"] - fraction * dy) ** 2
+        if distance < best[0]:
+            best = (distance, index, fraction)
+    _, index, fraction = best
+    next_index = index + (2 if fraction >= 0.999 else 1)
+    return (stops[next_index - 1] if next_index > 0 else None,
+            stops[next_index] if next_index < len(stops) else None)
+
+
 class Replay:
     def __init__(self, dataset: Path, features_path: Path,
-                 source_name: str = "Исторический NDTP"):
+                 source_name: str = "Исторический NDTP", full_route: bool = False):
         self.source_name = source_name
+        self.full_route = full_route
         self.rows = pd.read_parquet(features_path).drop(columns=list(FORBIDDEN), errors="ignore")
         self.rows["T"] = pd.to_datetime(self.rows["T"])
         self.rows["target_time_begin"] = pd.to_datetime(self.rows["target_time_begin"])
@@ -84,6 +107,8 @@ class Replay:
             source.close()
         for stops in self.stops.values():
             stops.sort(key=lambda stop: stop["time"])
+        self.stop_times = {vehicle: [_time(stop["time"]) for stop in stops]
+                           for vehicle, stops in self.stops.items()}
         for vehicle, group in packets.items():
             group.sort(key=lambda p: (p.available_time, p.event_time, p.packet_id))
             times, best_at = [], []
@@ -135,9 +160,14 @@ class Replay:
             if packet is None:
                 continue
             gps_age = max(0, (at - packet.event_time).total_seconds())
-            nearby = [stop for stop in stops if abs((_time(stop["time"]) - at).total_seconds()) <= 2700][:10]
-            next_stop = next((stop for stop in stops if _time(stop["time"]) >= at), None)
-            previous_stop = next((stop for stop in reversed(stops) if _time(stop["time"]) <= at), None)
+            stop_index = bisect_right(self.stop_times[vehicle], at)
+            nearby = (stops if self.full_route else
+                      stops[max(0, stop_index - 5):stop_index + 11])
+            if self.full_route:
+                previous_stop, next_stop = next_observed_stop(stops, packet)
+            else:
+                next_stop = stops[stop_index] if stop_index < len(stops) else None
+                previous_stop = stops[stop_index - 1] if stop_index else None
             section = (f"{stop_label(previous_stop)} → {stop_label(next_stop)}"
                        if previous_stop is not None and next_stop is not None else None)
             row = active_by_vehicle.get(vehicle)
@@ -180,7 +210,7 @@ async def lifespan(app: FastAPI):
     prepare_data(dataset, processed, routed)
     app.state.replay = Replay(dataset, routed / "validate_features.parquet")
     demo_archive, demo_features = generate_demo(Path(os.getenv("DEMO_PATH", "data/demo")))
-    app.state.demo = Replay(demo_archive, demo_features, "Синтетический учебный рейс")
+    app.state.demo = Replay(demo_archive, demo_features, "Синтетический учебный рейс", full_route=True)
     app.state.live = LiveStore()
     app.state.client = httpx.AsyncClient()
     app.state.ml_url = os.getenv("ML_URL", "http://127.0.0.1:8001").rstrip("/")

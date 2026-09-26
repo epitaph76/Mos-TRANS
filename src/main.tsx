@@ -29,8 +29,10 @@ type Filter = 'all' | 'normal' | 'deviation' | 'risk'
 type Status = 'normal' | 'minor' | 'delay' | 'critical' | 'early' | 'unknown'
 
 type Mode = 'replay' | 'demo' | 'live'
-const initialDemo = new URLSearchParams(window.location.search).get('demo') === '1'
-const initialAutoplay = new URLSearchParams(window.location.search).get('autoplay') === '1'
+const initialParams = new URLSearchParams(window.location.search)
+const initialMode: Mode = initialParams.get('mode') === 'live' ? 'live' : initialParams.get('demo') === '1' ? 'demo' : 'replay'
+const initialDemo = initialMode === 'demo'
+const initialAutoplay = initialParams.get('autoplay') === '1'
 const playbackSpeeds = [1, 15, 60, 300, 900]
 
 function normalizeVehicle(value: Partial<Vehicle> & { id: string; position?: [number, number] | null }): Vehicle | null {
@@ -89,14 +91,23 @@ function VehicleRow({ vehicle, active, onClick }: { vehicle: Vehicle; active: bo
   </button>
 }
 
-function VehicleDetail({ vehicle, time, day, onBack }: { vehicle: Vehicle; time: number; day: string; onBack: () => void }) {
+function VehicleDetail({ vehicle, time, day, demo, onBack }: { vehicle: Vehicle; time: number; day: string; demo: boolean; onBack: () => void }) {
   const status = statusOf(vehicle)
   const [tab, setTab] = useState<'tracking' | 'analytics' | 'details'>('tracking')
-  const windowStart = time - 45 * 60
-  const windowEnd = time + 45 * 60
-  const stopEvents = vehicle.stops
+  const allStops = vehicle.stops
     .map(stop => ({ stop, timestamp: stopSeconds(stop.time, day) }))
-    .filter(event => event.timestamp >= windowStart && event.timestamp <= windowEnd)
+    .sort((a, b) => a.timestamp - b.timestamp)
+  const stopEvents = allStops
+  const stopPosition = (index: number) => stopEvents.length <= 1 ? 50 : index / (stopEvents.length - 1) * 100
+  const nextPlannedIndex = stopEvents.findIndex(event => event.timestamp > time)
+  const previousPlannedIndex = nextPlannedIndex === -1 ? stopEvents.length - 1 : nextPlannedIndex - 1
+  const plannedFraction = previousPlannedIndex < 0 || nextPlannedIndex < 0 ? 0 :
+    Math.max(0, Math.min(1, (time - stopEvents[previousPlannedIndex].timestamp) /
+      Math.max(1, stopEvents[nextPlannedIndex].timestamp - stopEvents[previousPlannedIndex].timestamp)))
+  const nextObservedIndex = demo ? (vehicle.nextStop ? stopEvents.findIndex(event => event.stop.id === vehicle.nextStop?.id) : stopEvents.length) : -1
+  const cursorPercent = stopPosition(Math.max(0, previousPlannedIndex) + plannedFraction)
+  const rulerLabels = [0, 0.25, 0.5, 0.75, 1].map(fraction =>
+    stopEvents.length ? timeOnly(stopEvents[Math.round(fraction * (stopEvents.length - 1))].stop.time) : '—')
   return <div className="detail-pane">
     <button className="back-button" onClick={onBack}><ArrowLeft size={17} /> К списку ТС</button>
     <div className="vehicle-card-heading">
@@ -115,12 +126,20 @@ function VehicleDetail({ vehicle, time, day, onBack }: { vehicle: Vehicle; time:
     </div>
     {tab === 'tracking' && <div className="detail-tab-content" role="tabpanel">
       <div className="tracking-heading"><strong>Остановки по расписанию</strong><span>{formatTime(time)} МСК</span></div>
-      <div className="tracking-ruler" aria-label="Интервал от 45 минут до и после выбранного времени">
-        <span>−45 мин</span><span>−15 мин</span><span className="tracking-now">Сейчас</span><span>+15 мин</span><span>+45 мин</span>
-        <div className="tracking-track"><i className="tracking-current" />{stopEvents.map(({ stop, timestamp }, index) => <i key={`${stop.id}-${index}`} className="tracking-stop" style={{ left: `${(timestamp - windowStart) / (windowEnd - windowStart) * 100}%` }} title={`${timeOnly(stop.time)} · ${stopName(stop.name)}`} />)}</div>
+      <div className="tracking-ruler" aria-label="Плановые остановки по порядку; расстояние между метками на схеме одинаковое">
+        {rulerLabels.map((label, index) => <span key={index}>{label}</span>)}
+        <div className="tracking-track"><i className="tracking-current" style={{ left: `${cursorPercent}%` }} />{stopEvents.map(({ stop, timestamp }, index) => <i key={`${stop.id}-${index}`} className={`tracking-stop ${demo && index < nextObservedIndex ? 'reached' : demo && timestamp < time ? 'overdue' : ''}`} style={{ left: `${stopPosition(index)}%` }} title={`${timeOnly(stop.time)} · ${stopName(stop.name)}`} />)}</div>
       </div>
-      {vehicle.nextStop && <div className="next-stop-feature"><MapPin size={18} /><div><span>Следующая остановка</span><strong>{stopName(vehicle.nextStop.name)}</strong><small>По расписанию · {timeOnly(vehicle.nextStop.time)}</small></div></div>}
-      <div className="stop-event-list">{stopEvents.length ? stopEvents.slice(0, 6).map(({ stop, timestamp }, index) => <div className="stop-event" key={`${stop.id}-${index}`}><span className={`stop-event-dot ${timestamp <= time ? 'past' : ''}`} /><time>{timeOnly(stop.time)}</time><span>{stopName(stop.name)}</span><small>{timestamp <= time ? 'По расписанию' : 'Далее по графику'}</small></div>) : <p className="empty-stop-events">Нет остановок в интервале ±45 минут от выбранного времени.</p>}</div>
+      <p className="tracking-legend">{demo ? 'Синий — достигнута по GPS · красный — плановое время прошло, ТС ещё не прибыло' : 'Метки — остановки по порядку, синяя линия — плановое положение во время среза'}</p>
+      {vehicle.nextStop && <div className="next-stop-feature"><MapPin size={18} /><div><span>{demo ? 'Следующая по GPS' : 'Следующая по расписанию'}</span><strong>{stopName(vehicle.nextStop.name)}</strong><small>План · {timeOnly(vehicle.nextStop.time)}</small></div></div>}
+      <div className="stop-event-list">{stopEvents.length ? stopEvents.map(({ stop, timestamp }, index) => {
+        const reached = demo && index < nextObservedIndex
+        const overdue = demo && !reached && timestamp < time
+        const state = demo ? reached ? 'Достигнута по GPS' : overdue ? 'Ожидается с опозданием' : 'Впереди по плану' : timestamp <= time ? 'Плановое время прошло' : 'Далее по графику'
+        const intervalMinutes = index ? Math.round((timestamp - stopEvents[index - 1].timestamp) / 60) : 0
+        const interval = index ? intervalMinutes >= 10 ? `Разрыв в расписании ${intervalMinutes} мин · ` : intervalMinutes === 0 ? 'В ту же минуту · ' : `Интервал ${intervalMinutes} мин · ` : ''
+        return <div className={`stop-event ${intervalMinutes >= 10 ? 'schedule-gap' : ''}`} key={`${stop.id}-${index}`}><span className={`stop-event-dot ${reached || !demo && timestamp <= time ? 'past' : ''} ${overdue ? 'overdue' : ''}`} /><time>{timeOnly(stop.time)}</time><span>{stopName(stop.name)}</span><small>{interval}{state}</small></div>
+      }) : <p className="empty-stop-events">Нет плановых остановок для выбранного времени.</p>}</div>
     </div>}
     {tab === 'analytics' && <div className="detail-tab-content" role="tabpanel">
       <div className="prediction-block"><span className="eyebrow">Прогноз на 10–15 минут</span><strong className={status}>{minutes(vehicle.estimateSeconds)}</strong><p>{vehicle.probability === null ? 'В выбранный момент нет прогнозной точки с доступной моделью.' : `Вероятность опоздания более чем на 2 минуты: ${Math.round(vehicle.probability * 100)}%.`}</p></div>
@@ -179,7 +198,7 @@ const navItems: { id: View; label: string; icon: React.ElementType }[] = [
 function App() {
   const [time, setTime] = useState(initialDemo ? demoPlan.start : plan.start)
   const [playing, setPlaying] = useState(initialDemo && initialAutoplay)
-  const [mode, setMode] = useState<Mode>(initialDemo ? 'demo' : 'replay')
+  const [mode, setMode] = useState<Mode>(initialMode)
   const activePlan = mode === 'demo' ? demoPlan : plan
   const startTime = activePlan.start
   const endTime = activePlan.end
@@ -249,6 +268,13 @@ function App() {
   })
   const countRisk = vehicles.filter(v => statusOf(v) === 'critical').length
   const switchMode = (next: Mode) => {
+    const url = new URL(window.location.href)
+    url.searchParams.delete('autoplay')
+    if (next === 'demo') url.searchParams.set('demo', '1')
+    else url.searchParams.delete('demo')
+    if (next === 'live') url.searchParams.set('mode', 'live')
+    else url.searchParams.delete('mode')
+    window.history.replaceState(null, '', url)
     setMode(next)
     setPlaying(false)
     setTime((next === 'demo' ? demoPlan : plan).start)
@@ -281,7 +307,7 @@ function App() {
         {monitorCollapsed ? null : <aside className="right-panel">
           {selectedId ? <>
             <button className="collapse-detail" onClick={() => setMonitorCollapsed(true)} title="Свернуть мониторинг" aria-label="Свернуть мониторинг"><PanelRightClose size={18} /></button>
-            {selected ? mode === 'live' ? <LiveDetail vehicle={selected} onBack={() => setSelectedId(null)} /> : <VehicleDetail vehicle={selected} time={time} day={activePlan.date} onBack={() => setSelectedId(null)} /> : <InactiveRouteDetail id={selectedId} onBack={() => setSelectedId(null)} />}
+            {selected ? mode === 'live' ? <LiveDetail vehicle={selected} onBack={() => setSelectedId(null)} /> : <VehicleDetail vehicle={selected} time={time} day={activePlan.date} demo={mode === 'demo'} onBack={() => setSelectedId(null)} /> : <InactiveRouteDetail id={selectedId} onBack={() => setSelectedId(null)} />}
           </> : <>
             <div className="panel-header">
               <button className="monitor-heading" onClick={() => setMonitorCollapsed(true)} title="Свернуть мониторинг"><span className="eyebrow">МОНИТОРИНГ</span><span className="monitor-title">Транспорт на линии <span>{vehicles.length}</span></span></button>

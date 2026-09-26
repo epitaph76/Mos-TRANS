@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from mos_trans.backend_api import Replay
+from mos_trans.backend_api import Replay, next_observed_stop
 from mos_trans.demo import DAY, VEHICLE, generate
 from mos_trans.inference import FORBIDDEN, Predictor
 
@@ -28,11 +28,16 @@ class DemoTests(unittest.TestCase):
                                forecasts.iloc[0].probability_delay_over_120s)
             self.assertGreater(forecasts.iloc[15].predicted_delay_s,
                                forecasts.iloc[0].predicted_delay_s)
-            replay = Replay(archive, features)
+            replay = Replay(archive, features, full_route=True)
             before_receipt = replay.position(VEHICLE, DAY + timedelta(minutes=15))
             after_receipt = replay.position(VEHICLE, DAY + timedelta(minutes=15, seconds=2))
             self.assertLess(before_receipt.event_time, DAY + timedelta(minutes=15))
             self.assertEqual(after_receipt.event_time, DAY + timedelta(minutes=15))
+            self.assertEqual(len(replay.stops[VEHICLE]), 16)
+            stalled_packet = replay.position(VEHICLE, DAY + timedelta(minutes=20))
+            previous, upcoming = next_observed_stop(replay.stops[VEHICLE], stalled_packet)
+            self.assertEqual(previous["id"], "DEMO-05")
+            self.assertEqual(upcoming["id"], "DEMO-06")
 
 
 if __name__ == "__main__":
