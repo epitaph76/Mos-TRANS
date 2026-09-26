@@ -12,17 +12,11 @@ type Vehicle = {
   estimateSeconds: number | null; probability: number | null;
   positionMethod?: 'gps' | 'route' | 'heading'
 }
-type Status = 'normal' | 'minor' | 'delay' | 'critical' | 'early' | 'unknown'
 type Props = {
   vehicles: Vehicle[]; selected: Vehicle | null; selectedId: string | null;
-  selectedStatus: Status; onSelect: (id: string) => void;
+  onSelect: (id: string) => void;
   showRoutes: boolean; setShowRoutes: (value: boolean) => void;
   collapsed: boolean; network: SharedNetwork;
-}
-
-const statusColor: Record<Status, string> = {
-  normal: '#16b77c', minor: '#e6a619', delay: '#fa7c3e',
-  critical: '#ed4255', early: '#4188e9', unknown: '#0865ff',
 }
 
 function networkGeoJSON(network: SharedNetwork): GeoJSON.FeatureCollection<GeoJSON.LineString> {
@@ -45,7 +39,7 @@ function routeBounds(network: SharedNetwork, vehicleId: string) {
   return count ? bounds : null
 }
 
-export default function TransportMap({ vehicles, selected, selectedId, selectedStatus, onSelect,
+export default function TransportMap({ vehicles, selected, selectedId, onSelect,
   showRoutes, setShowRoutes, collapsed, network }: Props) {
   const host = useRef<HTMLDivElement>(null)
   const mapRef = useRef<MapLibreMap | null>(null)
@@ -143,7 +137,6 @@ export default function TransportMap({ vehicles, selected, selectedId, selectedS
       map.setLayoutProperty('selected-network-halo', 'visibility', showRoutes && selectedId ? 'visible' : 'none')
       map.setLayoutProperty('selected-network', 'visibility', showRoutes && selectedId ? 'visible' : 'none')
       map.setPaintProperty('network', 'line-opacity', selectedId ? 0.14 : 0.75)
-      map.setPaintProperty('selected-network', 'line-color', statusColor[selectedStatus])
       const filter: maplibregl.FilterSpecification = selectedId
         ? ['in', selectedId, ['get', 'owners']]
         : ['==', ['get', 'selected'], true]
@@ -152,7 +145,7 @@ export default function TransportMap({ vehicles, selected, selectedId, selectedS
     }
     if (map.isStyleLoaded()) update()
     else map.once('load', update)
-  }, [selectedId, selectedStatus, showRoutes])
+  }, [selectedId, showRoutes])
 
   useEffect(() => {
     const map = mapRef.current
