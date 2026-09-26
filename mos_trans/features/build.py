@@ -4,6 +4,7 @@ import argparse
 import pandas as pd
 
 from mos_trans.features.route_sections import (add_route_signatures, attach_planned_sections, build_route_segments, load_schedule)
+from mos_trans.features.delay_context import add_delay_trend_features
 
 SPLITS = (
     "train",
@@ -56,6 +57,7 @@ def build_feature_set(
             frame,
             segments,
         )
+        enriched = add_delay_trend_features(enriched)
 
         if len(enriched) != initial_rows:
             raise ValueError(
@@ -102,8 +104,18 @@ def build_feature_set(
         section_coverage = (
             enriched[
                 "planned_section_available"
-            ]
-            .mean()
+            ].mean()
+        )
+        previous_delay_coverage = (
+            enriched[
+                "previous_delay_available"
+            ].mean()
+        )
+
+        lag_2_coverage = (
+            enriched[
+                "lag_2_available"
+            ].mean()
         )
 
         print("rows:", len(enriched))
@@ -114,6 +126,15 @@ def build_feature_set(
         print(
             "planned section coverage:",
             round(section_coverage, 4),
+        )
+        print(
+            "previous delay coverage:",
+            round(previous_delay_coverage, 4),
+        )
+
+        print(
+            "lag 2 coverage:",
+            round(lag_2_coverage, 4),
         )
         print(
             "unique routes:",
