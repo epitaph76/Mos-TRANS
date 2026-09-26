@@ -1,0 +1,42 @@
+{
+  "target": "target_delay_s - cur_dev_s",
+  "rows": {
+    "full_train": 4434,
+    "fit_train": 3532,
+    "early_stop_validation": 902,
+    "test": 353,
+    "validate": 151
+  },
+  "feature_count": 36,
+  "categorical_columns": [
+    "tr_id",
+    "schedule_target_address"
+  ],
+  "synthetic_weights": 0.7,
+  "best_iteration": 442,
+  "baselines": {
+    "median_train_delta": {
+      "median_delta_s": 0.0,
+      "mae": 93.35977337110482,
+      "rmse": 128.15478424628736
+    }
+  },
+  "early_stop_validation": {
+    "mae_delay_s": 87.5818634225502,
+    "rmse_delay_s": 124.8459685047058,
+    "mae_delta_s": 87.5818634225502,
+    "mean_error_s": 5.484629191428311,
+    "median_absolute_error_s": 59.99203386938402,
+    "p90_absolute_error_s": 203.77771058951456,
+    "predicted_delta_mean_s": -15.310571541760906
+  },
+  "test": {
+    "mae_delay_s": 61.21545278459342,
+    "rmse_delay_s": 87.64791783961626,
+    "mae_delta_s": 61.21545278459342,
+    "mean_error_s": 8.523809906263596,
+    "median_absolute_error_s": 47.44676374468734,
+    "p90_absolute_error_s": 129.5923391645954,
+    "predicted_delta_mean_s": -16.121543617311755
+  }
+}

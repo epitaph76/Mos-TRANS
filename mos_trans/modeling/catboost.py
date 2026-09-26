@@ -9,6 +9,8 @@ import pandas as pd
 from catboost import CatBoostRegressor
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 
+from mos_trans.modeling.weights import (build_sample_weights)
+
 ID_COLUMN = "sample_id"
 CURRENT_DELAY_COLUMN = "cur_dev_s"
 TARGET_COLUMN = "target_delay_s"
@@ -21,10 +23,14 @@ EXCLUDED_COLUMNS = {
     "target_delay_s",
     "target_delta_s",
     "target_stop_id",
+    "section_from_time",
+    "section_to_time"
 }
 
 CATEGORICAL_COLUMNS = [
     "tr_id",
+    "route_signature",
+    "section_id",
     "schedule_target_address",
 ]
 
@@ -100,12 +106,17 @@ def split_train_by_time(frame: pd.DataFrame, validation_fraction: float = 0.2) -
     return fit_train, early_stop_validation
 
 def train_model(fit_train: pd.DataFrame, early_stop_validation: pd.DataFrame,
-                feature_columns: list[str], categorical_columns: list[str]) -> CatBoostRegressor:
+                feature_columns: list[str], categorical_columns: list[str],
+                synthetic_weight:float) -> CatBoostRegressor:
     model = create_model()
+
+    sample_weights = build_sample_weights(fit_train, synthetic_weight=synthetic_weight)
+
     model.fit(
         fit_train[feature_columns],
         fit_train[RESIDUAL_TARGET_COLUMN],
         cat_features=categorical_columns,
+        sample_weight=sample_weights,
         eval_set=(early_stop_validation[feature_columns], early_stop_validation[RESIDUAL_TARGET_COLUMN]),
         early_stopping_rounds=150,
         use_best_model=True,
@@ -286,7 +297,8 @@ def save_submission(template: pd.DataFrame, validate: pd.DataFrame,
         submission["prediction"].mean(),
     )
 
-def run(input_dir: Path, output_dir: Path, dataset_path: Path):
+def run(input_dir: Path, output_dir: Path, dataset_path: Path,
+        make_submission: bool, synthetic_weight:float):
     output_dir.mkdir(parents=True, exist_ok=True)
 
     train, test, validate = load_datasets(input_dir)
@@ -315,7 +327,8 @@ def run(input_dir: Path, output_dir: Path, dataset_path: Path):
 
     baseline_median = median_delta_baseline(train, test)
 
-    model = train_model(fit_train, early_stop_validation, feature_columns, categorical_columns)
+    model = train_model(fit_train, early_stop_validation, feature_columns, categorical_columns,
+                        synthetic_weight)
 
     test_delta_prediction, test_delay_prediction = (
         predict_final_delay(
@@ -359,6 +372,7 @@ def run(input_dir: Path, output_dir: Path, dataset_path: Path):
         },
         "feature_count": len(feature_columns),
         "categorical_columns": categorical_columns,
+        "synthetic_weights": synthetic_weight,
         "best_iteration": model.get_best_iteration(),
         "baselines": {
             "median_train_delta": baseline_median,
@@ -394,36 +408,39 @@ def run(input_dir: Path, output_dir: Path, dataset_path: Path):
     with open(output_dir / "metrics.json", "w", encoding="utf-8") as file:
         json.dump(metrics, file, indent=2, ensure_ascii=False)
     save_feature_importance(model, feature_columns, output_dir)
-    best_iteration = model.get_best_iteration()
-    final_model = train_final_model(train=train, test=test, feature_columns=feature_columns,
-                                    categorical_columns=categorical_columns, best_iteration=best_iteration)
-    validate_delta_prediction, validate_delay_prediction = (predict_final_delay(final_model, validate, feature_columns))
 
-    submission_template = load_submission_template(dataset_path)
-    save_submission(template=submission_template, validate=validate,
-                    predicted_delay=validate_delay_prediction, output_path=output_dir / "submission.csv")
+    if make_submission:
+        best_iteration = model.get_best_iteration()
+        
+        final_model = train_final_model(train=train, test=test, feature_columns=feature_columns,
+                                        categorical_columns=categorical_columns, best_iteration=best_iteration)
+        validate_delta_prediction, validate_delay_prediction = (predict_final_delay(final_model, validate, feature_columns))
 
-    final_model.save_model(str(output_dir / "catboost_residual_final.cbm"))
-    validate_diagnostics = pd.DataFrame(
-        {
-            "sample_id": validate[ID_COLUMN],
-            "cur_dev_s": validate[
-                CURRENT_DELAY_COLUMN
-            ],
-            "predicted_delta_s": (
-                validate_delta_prediction
-            ),
-            "prediction": (
-                validate_delay_prediction
-            ),
-        }
-    )
+        submission_template = load_submission_template(dataset_path)
+        save_submission(template=submission_template, validate=validate,
+                        predicted_delay=validate_delay_prediction, output_path=output_dir / "submission.csv")
 
-    validate_diagnostics.to_csv(
-        output_dir
-        / "validate_predictions_diagnostics.csv",
-        index=False,
-    )
+        final_model.save_model(str(output_dir / "catboost_residual_final.cbm"))
+        validate_diagnostics = pd.DataFrame(
+            {
+                "sample_id": validate[ID_COLUMN],
+                "cur_dev_s": validate[
+                    CURRENT_DELAY_COLUMN
+                ],
+                "predicted_delta_s": (
+                    validate_delta_prediction
+                ),
+                "prediction": (
+                    validate_delay_prediction
+                ),
+            }
+        )
+
+        validate_diagnostics.to_csv(
+            output_dir
+            / "validate_predictions_diagnostics.csv",
+            index=False,
+        )
 
 
 def parse_args():
@@ -431,12 +448,15 @@ def parse_args():
     parser.add_argument("--input", type=Path, default=Path("data/processed"))
     parser.add_argument("--output", type=Path, default=Path("artifacts/catboost_base"))
     parser.add_argument("--dataset", type=Path, default=Path("data/dataset.zip"))
+    parser.add_argument("--make-submission", action="store_true")
+    parser.add_argument("--synthetic-weight", type=float,default=1.0)
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
-    run(args.input, args.output, args.dataset)
+    run(args.input, args.output, args.dataset,
+        args.make_submission, args.synthetic_weight)
 
 
 if __name__ == "__main__":

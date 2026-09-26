@@ -1,0 +1,44 @@
+{
+  "target": "target_delay_s - cur_dev_s",
+  "rows": {
+    "full_train": 4434,
+    "fit_train": 3532,
+    "early_stop_validation": 902,
+    "test": 353,
+    "validate": 151
+  },
+  "feature_count": 45,
+  "categorical_columns": [
+    "tr_id",
+    "route_signature",
+    "section_id",
+    "schedule_target_address"
+  ],
+  "synthetic_weights": 1.0,
+  "best_iteration": 556,
+  "baselines": {
+    "median_train_delta": {
+      "median_delta_s": 0.0,
+      "mae": 93.35977337110482,
+      "rmse": 128.15478424628736
+    }
+  },
+  "early_stop_validation": {
+    "mae_delay_s": 84.96412274147853,
+    "rmse_delay_s": 121.43239649951798,
+    "mae_delta_s": 84.96412274147852,
+    "mean_error_s": 9.088122660837,
+    "median_absolute_error_s": 58.96997450693301,
+    "p90_absolute_error_s": 196.9507316222777,
+    "predicted_delta_mean_s": -18.914065011169594
+  },
+  "test": {
+    "mae_delay_s": 56.73721802761106,
+    "rmse_delay_s": 83.01968593614222,
+    "mae_delta_s": 56.73721802761106,
+    "mean_error_s": 11.104746559845086,
+    "median_absolute_error_s": 40.466510612027534,
+    "p90_absolute_error_s": 121.93026062139293,
+    "predicted_delta_mean_s": -18.702480270893243
+  }
+}
