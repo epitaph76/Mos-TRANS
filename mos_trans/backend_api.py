@@ -191,6 +191,7 @@ class Replay:
                 "id": vehicle, "position": [packet.lat, packet.lon],
                 "speed": packet.speed if packet.speed is not None else 0,
                 "heading": packet.heading, "gpsAgeMin": gps_age / 60,
+                "gpsEventTime": packet.event_time.isoformat(),
                 "stale": gps_age > 120,
                 "stops": nearby, "nextStop": next_stop,
                 "estimateSeconds": prediction["predicted_delay_s"] if prediction else None,

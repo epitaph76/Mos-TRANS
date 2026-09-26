@@ -106,3 +106,80 @@ export function positionAt(track: TrackPoint[], time: number) {
     heading: previous[4],
   }
 }
+
+type RouteEdge = [number, number]
+const routeEdgesCache = new WeakMap<SharedNetwork, Map<string, RouteEdge[]>>()
+
+function routeEdges(network: SharedNetwork, vehicleId: string): RouteEdge[] {
+  let byVehicle = routeEdgesCache.get(network)
+  if (!byVehicle) { byVehicle = new Map(); routeEdgesCache.set(network, byVehicle) }
+  let edges = byVehicle.get(vehicleId)
+  if (!edges) {
+    edges = network.edges.filter(([, , owners]) => owners.includes(vehicleId)).map(([a, b]) => [a, b])
+    byVehicle.set(vehicleId, edges)
+  }
+  return edges
+}
+
+export type EstimatedPosition = { position: [number, number]; method: 'gps' | 'route' | 'heading' }
+
+/** Move from an already received fix; the next GPS packet is never an input. */
+export function estimateBetweenFixes(position: [number, number], speedKmh: number, heading: number | null,
+  secondsSinceFix: number, network: SharedNetwork, vehicleId: string): EstimatedPosition {
+  const observed: EstimatedPosition = { position, method: 'gps' }
+  if (!Number.isFinite(secondsSinceFix) || secondsSinceFix <= 0 || !Number.isFinite(speedKmh) || speedKmh <= 0) return observed
+  const elapsed = Math.min(secondsSinceFix, 30)
+  const travel = Math.min(600, Math.min(speedKmh, 100) * elapsed / 3.6)
+  const metersLat = 111_320
+  const metersLon = metersLat * Math.cos(position[0] * Math.PI / 180)
+  const edges = routeEdges(network, vehicleId)
+  let best = { score: Infinity, distance: Infinity, index: -1, fraction: 0 }
+  for (let index = 0; index < edges.length; index++) {
+    const [a, b] = edges[index]
+    const from = network.nodes[a], to = network.nodes[b]
+    const dx = (to[1] - from[1]) * metersLon, dy = (to[0] - from[0]) * metersLat
+    const length2 = dx * dx + dy * dy
+    if (length2 < 1 || length2 > 4_000_000) continue
+    const px = (position[1] - from[1]) * metersLon, py = (position[0] - from[0]) * metersLat
+    const fraction = Math.max(0, Math.min(1, (px * dx + py * dy) / length2))
+    const distance = Math.hypot(px - fraction * dx, py - fraction * dy)
+    const bearing = (Math.atan2(dx, dy) * 180 / Math.PI + 360) % 360
+    const headingDelta = heading === null ? 0 : Math.abs((bearing - heading + 540) % 360 - 180)
+    const score = distance + (headingDelta > 100 ? 120 : headingDelta * 0.15)
+    if (score < best.score) best = { score, distance, index, fraction }
+  }
+  if (best.index < 0 || best.distance > 300) {
+    if (heading === null || !Number.isFinite(heading)) return observed
+    const radians = heading * Math.PI / 180
+    return { position: [position[0] + Math.cos(radians) * travel / metersLat,
+      position[1] + Math.sin(radians) * travel / metersLon], method: 'heading' }
+  }
+
+  const [startA, startB] = edges[best.index]
+  const startFrom = network.nodes[startA], startTo = network.nodes[startB]
+  const snapped: [number, number] = [
+    startFrom[0] + (startTo[0] - startFrom[0]) * best.fraction,
+    startFrom[1] + (startTo[1] - startFrom[1]) * best.fraction,
+  ]
+  let index = best.index, fraction = best.fraction, remaining = travel
+  while (remaining > 0 && index < edges.length) {
+    const [a, b] = edges[index]
+    const from = network.nodes[a], to = network.nodes[b]
+    const length = Math.hypot((to[1] - from[1]) * metersLon, (to[0] - from[0]) * metersLat)
+    if (length < 1 || length > 2000) break
+    const available = (1 - fraction) * length
+    if (remaining <= available) { fraction += remaining / length; remaining = 0; break }
+    remaining -= available
+    fraction = 1
+    if (index + 1 >= edges.length || edges[index + 1][0] !== b) break
+    index++
+    fraction = 0
+  }
+  const [a, b] = edges[index]
+  const from = network.nodes[a], to = network.nodes[b]
+  const blend = Math.max(0, 1 - elapsed / 15)
+  return { position: [
+    from[0] + (to[0] - from[0]) * fraction + (position[0] - snapped[0]) * blend,
+    from[1] + (to[1] - from[1]) * fraction + (position[1] - snapped[1]) * blend,
+  ], method: 'route' }
+}

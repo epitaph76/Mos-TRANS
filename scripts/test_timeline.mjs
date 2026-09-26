@@ -5,7 +5,7 @@ import ts from 'typescript'
 
 const source = readFileSync(new URL('../src/timeline.ts', import.meta.url), 'utf8')
 const { outputText } = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.ESNext } })
-const { positionAt, formatTime, stopSeconds, forecastAt, indexNetwork, snapToNetwork } = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString('base64')}`)
+const { positionAt, formatTime, stopSeconds, forecastAt, indexNetwork, snapToNetwork, estimateBetweenFixes } = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString('base64')}`)
 const track = [[10, 55, 37, 20, 0], [30, 55.002, 37.004, 25, 90], [600, 56, 38, 0, null]]
 
 test('positions use only observed fixes, never the next GPS packet', () => {
@@ -57,4 +57,22 @@ test('GPS position snaps only to a nearby corridor owned by the vehicle', () => 
   assert(Math.abs(snapToNetwork(point, 90, network, 'bus-a')[0] - 55) < 1e-6)
   assert.deepEqual(snapToNetwork(point, 90, network, 'bus-b'), point)
   assert.deepEqual(snapToNetwork([55.01, 37.01], 90, network, 'bus-a'), [55.01, 37.01])
+})
+
+test('marker moves from the last received fix along the planned route, then accepts the next fix', () => {
+  const network = { mergeMeters: 0, nodes: [[55, 37], [55, 37.002], [55.001, 37.002]],
+    edges: [[0, 1, ['bus']], [1, 2, ['bus']]] }
+  const start = [55, 37]
+  const after5 = estimateBetweenFixes(start, 36, 90, 5, network, 'bus')
+  const after20 = estimateBetweenFixes(start, 36, 90, 20, network, 'bus')
+  assert.equal(after5.method, 'route')
+  assert(after5.position[1] > start[1])
+  assert(after20.position[0] > start[0])
+  assert(Math.abs(estimateBetweenFixes([55.0002, 37], 18, 90, 15, network, 'bus').position[0] - 55) < 1e-8)
+  assert.deepEqual(estimateBetweenFixes([55.0002, 37.0021], 20, 0, 0, network, 'bus').position,
+    [55.0002, 37.0021])
+  assert.deepEqual(estimateBetweenFixes(start, 36, 90, -1, network, 'bus').position, start)
+  assert.deepEqual(estimateBetweenFixes(start, 0, 90, 10, network, 'bus').position, start)
+  assert.deepEqual(estimateBetweenFixes(start, 36, 90, 40, network, 'bus').position,
+    estimateBetweenFixes(start, 36, 90, 30, network, 'bus').position)
 })
