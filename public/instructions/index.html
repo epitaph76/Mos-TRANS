@@ -101,7 +101,7 @@ docker run --rm -p 18080:18080 --name ndtp-emu ndtp-telemetry-emulator:1.0</code
         <ol>
           <li>Откройте <a href="/api/health"><code>/api/health</code></a>: <code>ndtpFrames</code> растёт, <code>ndtpErrors=0</code>. Handshake тоже входит в счётчик кадров.</li>
           <li>Откройте <a href="/api/live/snapshot"><code>/api/live/snapshot</code></a>: в <code>vehicles</code> ожидается <code>id=131672</code>, <code>unitId=985940</code>, координаты и <code>nextStop</code>.</li>
-          <li>Откройте <a href="/">дашборд</a>: в мониторе и на карте видно ТС. Пакет остаётся видимым 120 секунд после получения.</li>
+          <li>Откройте <a href="/">дашборд</a> и вкладку <strong>NDTP</strong>: в мониторе и на карте видно ТС. Пакет остаётся видимым 120 секунд после получения.</li>
         </ol>
         <button class="button secondary" type="button" id="check-live">Проверить сервер сейчас</button>
         <div class="result" id="live-result" aria-live="polite">Нажмите кнопку для проверки.</div>
@@ -110,8 +110,8 @@ docker run --rm -p 18080:18080 --name ndtp-emu ndtp-telemetry-emulator:1.0</code
 
     <section>
       <h2>3. Прогнозы и алерты</h2>
-      <p class="callout warning"><strong>Разделение режимов:</strong> текущий дашборд показывает живой NDTP и маршрут. Прогноз задержки по новому NDTP-пакету пока не рассчитывается. Проверенные прогнозы модели доступны в историческом API по данным 6 января 2026 года.</p>
-      <p>Откройте <a href="/api/replay/snapshot?at=50000"><code>/api/replay/snapshot?at=50000</code></a> или кнопку ниже. Поле <code>estimateSeconds</code> — прогноз задержки в секундах; <code>probability</code> — вероятность задержки более 120 секунд. <code>reason</code> и <code>recommendation</code> — объяснение и действие диспетчера.</p>
+      <p class="callout warning"><strong>Два режима:</strong> во вкладке <strong>NDTP</strong> видны новые пакеты и маршрут; прогноз задержки по ним пока не рассчитывается. Во вкладке <strong>История</strong> доступны прогнозы модели на данных 6 января 2026 года.</p>
+      <p>Откройте <a href="/?mode=history&amp;at=50000">исторический дашборд на 13:53:20</a>: шкала времени, воспроизведение, прогнозы и события. Выберите ТС на карте, чтобы увидеть риск, объяснение и остановки. JSON того же среза — <a href="/api/replay/snapshot?at=50000"><code>/api/replay/snapshot?at=50000</code></a>. <code>estimateSeconds</code> — прогноз задержки; <code>probability</code> — вероятность опоздания более 120 секунд.</p>
       <p>Индикация риска: <span class="risk normal">ниже 70%</span> <span class="risk minor">70–89%</span> <span class="risk critical">от 90%</span>. Это пороги интерфейса; автоматической отправки уведомлений нет.</p>
       <button class="button" type="button" id="check-forecast">Показать пример прогноза</button>
       <div class="result" id="forecast-result" aria-live="polite">Нажмите кнопку для примера из исторического датасета.</div>
