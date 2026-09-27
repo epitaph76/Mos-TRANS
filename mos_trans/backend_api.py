@@ -98,6 +98,12 @@ class Replay:
             self.row_times[str(vehicle)] = group["T"].tolist()
             self.vehicle_rows[str(vehicle)] = list(group.itertuples(index=False))
         self.predictions: dict[str, dict] = {}
+        # 1x playback must request inference at the replay cursor, independently
+        # of the forecasts calculated in the background for accelerated playback.
+        self.on_demand_predictions: dict[str, dict] = {}
+        self.on_demand_generated_at: dict[str, datetime] = {}
+        self.background_scoring = asyncio.Event()
+        self.background_scoring.set()
         self.stream = status_path is not None
         self.status_times: dict[str, list[datetime]] = {}
         self.status_rows: dict[str, list] = {}
@@ -191,8 +197,11 @@ class Replay:
             return None
         return self.rows_by_id.get(str(self.vehicle_rows[vehicle][index].sample_id))
 
-    async def ensure_predictions(self, rows: pd.DataFrame, ml_url: str, client: httpx.AsyncClient) -> str:
-        missing = rows.loc[~rows.sample_id.astype(str).isin(self.predictions)]
+    async def ensure_predictions(self, rows: pd.DataFrame, ml_url: str, client: httpx.AsyncClient,
+                                 predictions: dict[str, dict] | None = None,
+                                 generated_at: datetime | None = None) -> str:
+        predictions = self.predictions if predictions is None else predictions
+        missing = rows.loc[~rows.sample_id.astype(str).isin(predictions)]
         if missing.empty:
             return "ready"
         payload = {"features": json_records(missing)}
@@ -200,7 +209,10 @@ class Replay:
             response = await client.post(f"{ml_url}/predict", json=payload, timeout=3.0)
             response.raise_for_status()
             for item in response.json()["predictions"]:
-                self.predictions[str(item["sample_id"])] = item
+                sample_id = str(item["sample_id"])
+                predictions[sample_id] = item
+                if generated_at is not None:
+                    self.on_demand_generated_at[sample_id] = generated_at
             return "ready"
         except (httpx.HTTPError, KeyError, ValueError):
             return "unavailable"
@@ -210,8 +222,10 @@ class Replay:
         if not self.stream:
             return
         for start in range(0, len(self.ordered), 256):
+            await self.background_scoring.wait()
             chunk = self.ordered.iloc[start:start + 256]
             while True:
+                await self.background_scoring.wait()
                 missing = chunk.loc[~chunk.sample_id.astype(str).isin(self.predictions)]
                 if missing.empty:
                     break
@@ -227,21 +241,29 @@ class Replay:
                     await asyncio.sleep(3)
             await asyncio.sleep(0)
 
-    async def snapshot(self, at_seconds: float, ml_url: str, client: httpx.AsyncClient) -> dict:
+    async def snapshot(self, at_seconds: float, ml_url: str, client: httpx.AsyncClient,
+                       on_demand: bool = False) -> dict:
+        if on_demand:
+            self.background_scoring.clear()
+        else:
+            self.background_scoring.set()
         at = datetime.combine(self.day, datetime.min.time()) + timedelta(seconds=at_seconds)
+        predictions = self.on_demand_predictions if on_demand else self.predictions
         active = self.active_rows(at)
-        model_status = await self.ensure_predictions(active, ml_url, client)
+        model_status = await self.ensure_predictions(active, ml_url, client, predictions,
+                                                     at if on_demand else None)
         active_by_vehicle = {str(row.tr_id): row for _, row in active.iterrows()}
         previous_by_vehicle = {
             vehicle: previous for vehicle in self.stops
             if (current := active_by_vehicle.get(vehicle)) is None or
-               str(current.sample_id) not in self.predictions
+               str(current.sample_id) not in predictions
             if (previous := self.latest_forecast_row(
                 vehicle, at, str(current.sample_id) if current is not None else None)) is not None
         }
         if previous_by_vehicle:
             fallback_status = await self.ensure_predictions(
-                pd.DataFrame(previous_by_vehicle.values()), ml_url, client)
+                pd.DataFrame(previous_by_vehicle.values()), ml_url, client, predictions,
+                at if on_demand else None)
             if fallback_status == "unavailable":
                 model_status = "unavailable"
         vehicles = []
@@ -272,7 +294,7 @@ class Replay:
             prior_row = (self.vehicle_rows[vehicle][prior_index]
                          if prior_index >= 0 and (at - prior_times[prior_index]).total_seconds() < 60
                          else None)
-            prediction = self.predictions.get(str(row.sample_id)) if row is not None else None
+            prediction = predictions.get(str(row.sample_id)) if row is not None else None
             forecast_stale = prediction is None
             next_forecast_index = bisect_right(prior_times, at)
             nearest_point = (prior_times[next_forecast_index] if next_forecast_index < len(prior_times)
@@ -291,7 +313,7 @@ class Replay:
                 point_direction = None
             if forecast_stale:
                 row = previous_by_vehicle.get(vehicle)
-                prediction = self.predictions.get(str(row.sample_id)) if row is not None else None
+                prediction = predictions.get(str(row.sample_id)) if row is not None else None
             prediction_status = None
             if self.stream and row is not None:
                 ready_ids = self.ready_ids.get(vehicle, [])
@@ -332,7 +354,9 @@ class Replay:
                 "forecastStopId": str(row.target_stop_id) if row is not None else None,
                 "forecastStop": target_stop,
                 "sampleId": str(row.sample_id) if row is not None else None,
-                "forecastGeneratedAt": (prediction_status.isoformat() if prediction_status is not None
+                "forecastGeneratedAt": (self.on_demand_generated_at[str(row.sample_id)].isoformat()
+                                        if on_demand and row is not None and prediction is not None else
+                                        prediction_status.isoformat() if prediction_status is not None
                                         else row["T"].isoformat() if row is not None and prediction else None),
                 "forecastPacketId": (str(stream_status.packet_id)
                                      if stream_status is not None else None),
@@ -346,6 +370,7 @@ class Replay:
         vehicles.sort(key=lambda item: (item["probability"] is None, -(item["probability"] or 0), item["id"]))
         return {"source": "historical-replay", "date": self.day.isoformat(),
                 "at": at.isoformat(), "modelStatus": model_status,
+                "predictionMode": "on_demand" if on_demand else "precomputed",
                 "activePoints": len(active), "vehicles": vehicles}
 
 
@@ -391,9 +416,11 @@ def health() -> dict:
 
 
 @app.get("/api/replay/snapshot")
-async def replay_snapshot(at: float = Query(ge=0, le=172800)) -> dict:
+async def replay_snapshot(at: float = Query(ge=0, le=172800),
+                          on_demand: bool = False) -> dict:
     try:
-        return await app.state.replay.snapshot(at, app.state.ml_url, app.state.client)
+        return await app.state.replay.snapshot(at, app.state.ml_url, app.state.client,
+                                               on_demand=on_demand)
     except (ValueError, KeyError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 

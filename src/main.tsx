@@ -314,7 +314,8 @@ function App() {
       if (mode !== 'live' && requestedTime === lastRequestedTime) return
       busy = true
       try {
-        const url = mode === 'live' ? '/api/live/snapshot' : `/api/${mode}/snapshot?at=${requestedTime}`
+        const url = mode === 'live' ? '/api/live/snapshot'
+          : `/api/${mode}/snapshot?at=${requestedTime}${mode === 'replay' && speed === 1 ? '&on_demand=true' : ''}`
         const response = await fetch(url)
         if (!response.ok) throw new Error(`API ${response.status}`)
         const state = await response.json()
@@ -331,7 +332,7 @@ function App() {
     void load()
     const timer = window.setInterval(() => { void load() }, mode === 'live' ? 1000 : 400)
     return () => { mounted = false; window.clearInterval(timer) }
-  }, [mode])
+  }, [mode, speed])
   const displayVehicles = mode === 'live' ? vehicles.map(vehicle => {
     const estimated = estimateBetweenFixes(vehicle.position, vehicle.speed, vehicle.heading,
       Math.max(0, vehicle.gpsAgeMin * 60), network, vehicle.id)

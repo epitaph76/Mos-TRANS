@@ -74,6 +74,76 @@ class RouteMatcherTests(unittest.TestCase):
 
 
 class StreamReplayTests(unittest.TestCase):
+    def test_one_x_scores_at_cursor_without_using_precomputed_forecast(self):
+        with tempfile.TemporaryDirectory() as folder:
+            dataset = Path(folder) / "sample.zip"
+            output = Path(folder) / "stream"
+            fixture(dataset)
+            build_stream_features(dataset, output)
+            replay = Replay(dataset, output / "stream_features.parquet",
+                            status_path=output / "stream_status.parquet")
+            first_id = replay.ordered.iloc[0].sample_id
+            replay.predictions[first_id] = {
+                "sample_id": first_id, "predicted_delay_s": 999.0,
+                "probability_delay_over_120s": 0.99,
+            }
+            requested_ids = []
+
+            def response(request: httpx.Request) -> httpx.Response:
+                rows = __import__("json").loads(request.content)["features"]
+                requested_ids.extend(row["sample_id"] for row in rows)
+                return httpx.Response(200, json={"predictions": [
+                    {"sample_id": row["sample_id"], "predicted_delay_s": 42.0,
+                     "probability_delay_over_120s": 0.2} for row in rows]})
+
+            async def snapshots():
+                async with httpx.AsyncClient(transport=httpx.MockTransport(response)) as client:
+                    before = await replay.snapshot(9, "http://ml", client, on_demand=True)
+                    first = await replay.snapshot(10, "http://ml", client, on_demand=True)
+                    again = await replay.snapshot(10, "http://ml", client, on_demand=True)
+                    second = await replay.snapshot(65, "http://ml", client, on_demand=True)
+                    return before, first, again, second
+
+            before, first, again, second = asyncio.run(snapshots())
+            self.assertEqual(before["activePoints"], 0)
+            self.assertEqual(first["predictionMode"], "on_demand")
+            self.assertEqual(first["vehicles"][0]["estimateSeconds"], 42.0)
+            self.assertEqual(first["vehicles"][0]["forecastGeneratedAt"], at(10).replace(" ", "T"))
+            self.assertEqual(again["vehicles"][0]["estimateSeconds"], 42.0)
+            self.assertEqual(second["vehicles"][0]["forecastGeneratedAt"], at(65).replace(" ", "T"))
+            self.assertEqual(len(requested_ids), 2)
+            self.assertEqual(requested_ids[0], first_id)
+            self.assertEqual(replay.predictions[first_id]["predicted_delay_s"], 999.0)
+
+    def test_background_scoring_pauses_during_one_x(self):
+        with tempfile.TemporaryDirectory() as folder:
+            dataset = Path(folder) / "sample.zip"
+            output = Path(folder) / "stream"
+            fixture(dataset)
+            build_stream_features(dataset, output)
+            replay = Replay(dataset, output / "stream_features.parquet",
+                            status_path=output / "stream_status.parquet")
+            requests = []
+
+            def response(request: httpx.Request) -> httpx.Response:
+                rows = __import__("json").loads(request.content)["features"]
+                requests.extend(rows)
+                return httpx.Response(200, json={"predictions": [
+                    {"sample_id": row["sample_id"], "predicted_delay_s": 42.0,
+                     "probability_delay_over_120s": 0.2} for row in rows]})
+
+            async def check():
+                async with httpx.AsyncClient(transport=httpx.MockTransport(response)) as client:
+                    replay.background_scoring.clear()
+                    task = asyncio.create_task(replay.score_all("http://ml", client))
+                    await asyncio.sleep(0)
+                    self.assertFalse(requests)
+                    replay.background_scoring.set()
+                    await task
+
+            asyncio.run(check())
+            self.assertEqual(len(requests), 2)
+
     def test_every_eligible_fix_and_replay_availability(self):
         with tempfile.TemporaryDirectory() as folder:
             dataset = Path(folder) / "sample.zip"
