@@ -119,6 +119,23 @@ class PredictionTests(unittest.TestCase):
                          sum(factor["impact_seconds"] for factor in explanation["factors"]))
         self.assertAlmostEqual(reconstructed, sample.predicted_delay_s, places=5)
 
+    def test_live_mode_explains_a_low_risk_prediction(self):
+        path = ROOT / "data/processed_route/validate_features.parquet"
+        if not path.exists():
+            self.skipTest("Locally prepared dataset is unavailable")
+        probabilities = pd.read_csv(ROOT / "artifacts/calibrated_probability/validate_probabilities.csv")
+        low_risk_id = probabilities.loc[probabilities.probability_delay_over_120s < 0.7,
+                                        "sample_id"].iloc[0]
+        frame = prediction_frame(path, self.predictor)
+        sample = frame.loc[frame.sample_id == low_risk_id]
+        result = self.predictor.predict(sample, explain_all=True).iloc[0]
+        explanation = result.delay_explanation
+        self.assertIsNotNone(explanation)
+        reconstructed = (explanation["current_deviation_seconds"] +
+                         explanation["base_seconds"] + explanation["other_seconds"] +
+                         sum(factor["impact_seconds"] for factor in explanation["factors"]))
+        self.assertAlmostEqual(reconstructed, result.predicted_delay_s, places=5)
+
 
 class ReplayTests(unittest.TestCase):
     def test_last_forecast_never_comes_from_future(self):

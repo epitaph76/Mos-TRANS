@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import * as maplibregl from 'maplibre-gl'
 import type { Map as MapLibreMap, Marker } from 'maplibre-gl'
 import { Crosshair, Layers3 } from 'lucide-react'
-import { snapToVehicleRoute, type SharedNetwork } from './timeline'
+import { pointOnRoadRoute, snapToVehicleRoute, type SharedNetwork } from './timeline'
 import { riskStatus } from './risk'
 import 'maplibre-gl/dist/maplibre-gl.css'
 
@@ -13,6 +13,8 @@ type Vehicle = {
   estimateSeconds: number | null; probability: number | null;
   forecastExpired?: boolean;
   gpsEventTime?: string | null;
+  routeKey?: string;
+  routeProgress?: number;
   positionMethod?: 'gps' | 'route' | 'heading'
 }
 type Props = {
@@ -24,7 +26,8 @@ type Props = {
   replayTime: number | null;
 }
 
-type Correction = { from: [number, number]; to: [number, number]; started: number }
+type Correction = { from: [number, number]; to: [number, number]; started: number; routeKey: string;
+  fromProgress?: number; toProgress?: number }
 const CORRECTION_MS = 900
 
 function networkGeoJSON(network: SharedNetwork): GeoJSON.FeatureCollection<GeoJSON.LineString> {
@@ -79,8 +82,11 @@ export default function TransportMap({ vehicles, selected, selectedId, onSelect,
   }, [showHint])
   const host = useRef<HTMLDivElement>(null)
   const mapRef = useRef<MapLibreMap | null>(null)
+  const networkRef = useRef(network)
+  networkRef.current = network
   const markers = useRef(new Map<string, Marker>())
   const corrections = useRef(new Map<string, Correction>())
+  const markerProgress = useRef(new Map<string, { key: string; progress: number }>())
   const gpsKeys = useRef(new Map<string, string | null>())
   const animationFrame = useRef<number | null>(null)
   const lastReplayTime = useRef<number | null>(null)
@@ -101,8 +107,14 @@ export default function TransportMap({ vehicles, selected, selectedId, onSelect,
         correction.from[0] + (correction.to[0] - correction.from[0]) * eased,
         correction.from[1] + (correction.to[1] - correction.from[1]) * eased,
       ]
-      const [lat, lon] = snapToVehicleRoute([interpolated[1], interpolated[0]], network, id)
+      const along = correction.fromProgress !== undefined && correction.toProgress !== undefined
+        ? correction.fromProgress + (correction.toProgress - correction.fromProgress) * eased : null
+      const roadPoint = along === null ? null : pointOnRoadRoute(networkRef.current, correction.routeKey, along)
+      const [lat, lon] = roadPoint ?? (correction.routeKey.includes(':')
+        ? [interpolated[1], interpolated[0]]
+        : snapToVehicleRoute([interpolated[1], interpolated[0]], networkRef.current, correction.routeKey))
       marker.setLngLat([lon, lat])
+      if (along !== null) markerProgress.current.set(id, { key: correction.routeKey, progress: along })
       if (progress === 1) corrections.current.delete(id)
     })
     if (corrections.current.size) animationFrame.current = requestAnimationFrame(animateCorrections)
@@ -117,10 +129,9 @@ export default function TransportMap({ vehicles, selected, selectedId, onSelect,
       attributionControl: { compact: true },
     })
     mapRef.current = map
-    const geojson = networkGeoJSON(network)
     const installLayers = () => {
       if (map.getSource('transport-network')) return
-      map.addSource('transport-network', { type: 'geojson', data: geojson })
+      map.addSource('transport-network', { type: 'geojson', data: networkGeoJSON(networkRef.current) })
       map.addLayer({ id: 'network', type: 'line', source: 'transport-network', paint: {
         'line-color': '#1182d3', 'line-width': 2.5, 'line-opacity': 0.75,
       }, layout: { 'line-cap': 'round', 'line-join': 'round' } })
@@ -153,6 +164,7 @@ export default function TransportMap({ vehicles, selected, selectedId, onSelect,
       if (animationFrame.current !== null) cancelAnimationFrame(animationFrame.current)
       animationFrame.current = null
       corrections.current.clear()
+      markerProgress.current.clear()
       gpsKeys.current.clear()
       lastReplayTime.current = null
       markers.current.forEach(marker => marker.remove())
@@ -160,6 +172,18 @@ export default function TransportMap({ vehicles, selected, selectedId, onSelect,
       map.remove()
       mapRef.current = null
     }
+  }, [])
+
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map) return
+    const updateNetwork = () => {
+      const source = map.getSource('transport-network') as maplibregl.GeoJSONSource | undefined
+      source?.setData(networkGeoJSON(networkRef.current))
+    }
+    if (map.isStyleLoaded()) updateNetwork()
+    else map.once('load', updateNetwork)
+    return () => { map.off('load', updateNetwork) }
   }, [network])
 
   useEffect(() => {
@@ -172,7 +196,7 @@ export default function TransportMap({ vehicles, selected, selectedId, onSelect,
     markers.current.forEach((marker, id) => {
       if (!visible.has(id)) {
         marker.remove(); markers.current.delete(id)
-        corrections.current.delete(id); gpsKeys.current.delete(id)
+        corrections.current.delete(id); gpsKeys.current.delete(id); markerProgress.current.delete(id)
       }
     })
     for (const vehicle of vehicles) {
@@ -189,6 +213,8 @@ export default function TransportMap({ vehicles, selected, selectedId, onSelect,
           .setLngLat([vehicle.position[1], vehicle.position[0]]).addTo(map)
         markers.current.set(vehicle.id, created)
         gpsKeys.current.set(vehicle.id, vehicle.gpsEventTime ?? null)
+        if (vehicle.routeProgress !== undefined) markerProgress.current.set(vehicle.id,
+          { key: vehicle.routeKey ?? vehicle.id, progress: vehicle.routeProgress })
         marker = created
       }
       const target: [number, number] = [vehicle.position[1], vehicle.position[0]]
@@ -196,13 +222,30 @@ export default function TransportMap({ vehicles, selected, selectedId, onSelect,
       const currentGps = vehicle.gpsEventTime ?? null
       if (!timeJump && previousGps && currentGps && previousGps !== currentGps) {
         const current = marker.getLngLat()
-        corrections.current.set(vehicle.id, { from: [current.lng, current.lat], to: target, started: performance.now() })
+        const key = vehicle.routeKey ?? vehicle.id
+        const before = markerProgress.current.get(vehicle.id)
+        const moveMeters = Math.hypot((target[1] - current.lat) * 111_320,
+          (target[0] - current.lng) * 111_320 * Math.cos(current.lat * Math.PI / 180))
+        const continuous = before?.key === key && vehicle.routeProgress !== undefined &&
+          Math.abs(vehicle.routeProgress - before.progress) <= Math.max(150, moveMeters * 2 + 60)
+        corrections.current.set(vehicle.id, { from: [current.lng, current.lat], to: target,
+          started: performance.now(), routeKey: key,
+          fromProgress: continuous ? before.progress : undefined,
+          toProgress: continuous ? vehicle.routeProgress : undefined })
         if (animationFrame.current === null) animationFrame.current = requestAnimationFrame(animateCorrections)
       } else if (corrections.current.has(vehicle.id) && !timeJump) {
         corrections.current.get(vehicle.id)!.to = target
+        corrections.current.get(vehicle.id)!.routeKey = vehicle.routeKey ?? vehicle.id
+        const correction = corrections.current.get(vehicle.id)!
+        if (correction.fromProgress !== undefined && vehicle.routeProgress !== undefined &&
+            Math.abs(vehicle.routeProgress - correction.fromProgress) <= 300)
+          correction.toProgress = vehicle.routeProgress
+        else { correction.fromProgress = undefined; correction.toProgress = undefined }
       } else {
         corrections.current.delete(vehicle.id)
         marker.setLngLat(target)
+        if (vehicle.routeProgress !== undefined) markerProgress.current.set(vehicle.id,
+          { key: vehicle.routeKey ?? vehicle.id, progress: vehicle.routeProgress })
       }
       gpsKeys.current.set(vehicle.id, currentGps)
       const element = marker.getElement()
@@ -243,6 +286,10 @@ export default function TransportMap({ vehicles, selected, selectedId, onSelect,
     else if (selectedId) {
       const bounds = routeBounds(network, selectedId)
       if (bounds) map.fitBounds(bounds, { padding: 40, maxZoom: 12, duration: 650 })
+    } else if (network.roadRoutes && Object.keys(network.roadRoutes.vehicles).length > 0) {
+      const [vehicleId] = Object.keys(network.roadRoutes.vehicles)
+      const bounds = routeBounds(network, vehicleId)
+      if (bounds) map.fitBounds(bounds, { padding: 38, maxZoom: 12, duration: 650 })
     } else map.flyTo({ center: [37.617, 55.752], zoom: 10, duration: 650 })
   }, [selectedId, network])
 

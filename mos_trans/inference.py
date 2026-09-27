@@ -39,7 +39,7 @@ class Predictor:
             *self.regressor_features, *self.probability_features,
         ]))
 
-    def predict(self, features: pd.DataFrame) -> pd.DataFrame:
+    def predict(self, features: pd.DataFrame, *, explain_all: bool = False) -> pd.DataFrame:
         if FORBIDDEN & set(features.columns):
             raise ValueError(f"Future or target columns: {sorted(FORBIDDEN & set(features.columns))}")
         missing = set(self.input_columns) - set(features.columns)
@@ -69,7 +69,8 @@ class Predictor:
             "probability_delay_over_120s": probability,
         })
         result["delay_explanation"] = None
-        risk_indices = np.flatnonzero((probability >= 0.7) & (delay > 0))
+        risk_indices = (np.arange(len(features)) if explain_all else
+                        np.flatnonzero((probability >= 0.7) & (delay > 0)))
         if len(risk_indices):
             categorical = [self.regressor_features.index(name) for name in
                            ("tr_id", "route_signature", "section_id", "schedule_target_address")

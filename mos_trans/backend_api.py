@@ -14,6 +14,7 @@ from pathlib import Path
 import httpx
 import pandas as pd
 from fastapi import FastAPI, HTTPException, Query
+from pydantic import BaseModel, Field
 
 from mos_trans.features.build import build_feature_set
 from mos_trans.demo import generate as generate_demo
@@ -385,15 +386,21 @@ async def lifespan(app: FastAPI):
     demo_archive, demo_features = generate_demo(Path(os.getenv("DEMO_PATH", "data/demo")))
     app.state.demo = Replay(demo_archive, demo_features, "Синтетический учебный рейс", full_route=True)
     app.state.live = LiveStore()
+    ndtp_port = int(os.getenv("NDTP_PORT", "9201"))
     app.state.client = httpx.AsyncClient()
     app.state.ml_url = os.getenv("ML_URL", "http://127.0.0.1:8001").rstrip("/")
+    app.state.live.ml_client = app.state.client
+    app.state.live.ml_url = app.state.ml_url
     scorer = asyncio.create_task(app.state.replay.score_all(app.state.ml_url, app.state.client))
     server = await asyncio.start_server(app.state.live.handle, host="0.0.0.0",
-                                        port=int(os.getenv("NDTP_PORT", "9201")))
+                                        port=ndtp_port)
     app.state.ndtp_server = server
     try:
         yield
     finally:
+        for task in app.state.live.forecast_tasks.values():
+            task.cancel()
+        await asyncio.gather(*app.state.live.forecast_tasks.values(), return_exceptions=True)
         scorer.cancel()
         try:
             await scorer
@@ -407,10 +414,29 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Mos-TRANS Dispatcher", version="1.0.0", lifespan=lifespan)
 
 
+class LiveRouteConfiguration(BaseModel):
+    unitId: int = Field(ge=1, le=0xFFFFFFFF)
+    route: str
+    trips: list[dict] = Field(default_factory=list)
+    tripId: str | None = None
+    sourceVehicleId: str | None = None
+
+
+@app.post("/api/live/configure")
+def live_configure(request: LiveRouteConfiguration) -> dict:
+    """Bind an NDTP device to a route and dated schedule before its packets arrive."""
+    try:
+        app.state.live.configure(request.unitId, request.model_dump())
+    except (ValueError, KeyError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"unitId": request.unitId, "route": request.route, "trips": len(request.trips)}
+
+
 @app.get("/api/health")
 def health() -> dict:
     return {"status": "ready", "ndtpConnections": app.state.live.connections,
-            "ndtpFrames": app.state.live.frames, "ndtpErrors": app.state.live.errors,
+            "ndtpFrames": app.state.live.frames, "ndtpNavFrames": app.state.live.nav_frames,
+            "ndtpErrors": app.state.live.errors,
             "historicalForecastRequests": len(app.state.replay.rows),
             "historicalForecastsReady": len(app.state.replay.predictions)}
 
@@ -428,6 +454,12 @@ async def replay_snapshot(at: float = Query(ge=0, le=172800),
 @app.get("/api/live/snapshot")
 def live_snapshot() -> dict:
     return app.state.live.snapshot()
+
+
+@app.get("/api/live/report")
+def live_report() -> dict:
+    """Diagnostics for an external NDTP replay; labels never enter the backend."""
+    return app.state.live.report()
 
 
 @app.get("/api/demo/snapshot")

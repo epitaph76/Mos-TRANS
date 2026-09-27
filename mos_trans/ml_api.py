@@ -15,6 +15,7 @@ from mos_trans.inference import Predictor
 
 class PredictionRequest(BaseModel):
     features: list[dict[str, Any]] = Field(min_length=1, max_length=256)
+    explain_all: bool = False
 
 
 class Prediction(BaseModel):
@@ -48,7 +49,8 @@ def health() -> dict[str, str]:
 @app.post("/predict", response_model=PredictionResponse)
 def predict(request: PredictionRequest) -> PredictionResponse:
     try:
-        result = app.state.predictor.predict(pd.DataFrame(request.features))
+        result = app.state.predictor.predict(pd.DataFrame(request.features),
+                                             explain_all=request.explain_all)
     except (ValueError, KeyError, TypeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return PredictionResponse(predictions=[Prediction(**row) for row in result.to_dict("records")])

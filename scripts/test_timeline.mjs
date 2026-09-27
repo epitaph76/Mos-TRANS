@@ -5,7 +5,8 @@ import ts from 'typescript'
 
 const source = readFileSync(new URL('../src/timeline.ts', import.meta.url), 'utf8')
 const { outputText } = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.ESNext } })
-const { positionAt, formatTime, stopSeconds, forecastAt, indexNetwork, snapToNetwork, snapToVehicleRoute, estimateBetweenFixes } = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString('base64')}`)
+const { positionAt, formatTime, stopSeconds, forecastAt, indexNetwork, snapToNetwork, snapToVehicleRoute,
+  estimateBetweenFixes, matchRoadFix, pointOnRoadRoute } = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString('base64')}`)
 const riskSource = readFileSync(new URL('../src/risk.ts', import.meta.url), 'utf8')
 const riskModule = ts.transpileModule(riskSource, { compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.ESNext } })
 const { riskStatus } = await import(`data:text/javascript;base64,${Buffer.from(riskModule.outputText).toString('base64')}`)
@@ -137,4 +138,41 @@ test('road geometry is used for both GPS snapping and travel around a bend', () 
   assert.equal(distant.method, 'route')
   assert.deepEqual(snapToVehicleRoute(distant.position, network, 'bus'), distant.position)
   assert.deepEqual(snapToVehicleRoute([55.0005, 37.0005], network, 'bus'), [55.0005, 37.001])
+})
+
+test('live е66 stays on its direction and does not jump across nearby road legs', () => {
+  const recording = JSON.parse(readFileSync(new URL('../mos_trans/replay_data/e66.json', import.meta.url), 'utf8'))
+  const roadRoutes = recording.roadRoutes
+  const network = { mergeMeters: 35, nodes: [], edges: [], roadRoutes: {
+    segments: roadRoutes.segments, vehicles: {
+      A: roadRoutes.directions.A, B: roadRoutes.directions.B,
+    },
+  } }
+  const meters = (a, b) => Math.hypot((a[0] - b[0]) * 111_320,
+    (a[1] - b[1]) * 111_320 * Math.cos(a[0] * Math.PI / 180))
+  for (const trip of recording.trips) {
+    const start = Date.parse(trip.stops[0].time)
+    const end = Date.parse(trip.stops.at(-1).time)
+    const fixes = recording.points.filter(point => {
+      const at = Date.parse(point.time)
+      return start <= at && at <= end
+    })
+    let previous = null
+    for (const fix of fixes) {
+      const raw = [fix.lat, fix.lon]
+      const dt = previous ? (Date.parse(fix.time) - Date.parse(previous.fix.time)) / 1000 : Infinity
+      const rawMove = previous ? meters(raw, previous.raw) : 0
+      const continuous = previous && dt <= 180
+      const match = matchRoadFix(raw, fix.heading, fix.speed ?? 0, network, trip.direction,
+        continuous ? previous.match.progressMeters : undefined,
+        Math.max(60, rawMove * 2 + 40), continuous ? previous.match.position : undefined)
+      assert(match, `${trip.id} has a road match at ${fix.time}`)
+      assert(match.distanceMeters < 120)
+      assert(meters(pointOnRoadRoute(network, trip.direction, match.progressMeters), match.position) < 3)
+      if (continuous && dt <= 45)
+        assert(meters(match.position, previous.match.position) <= rawMove + 45,
+          `${trip.id} jumped at ${fix.time}`)
+      previous = { fix, raw, match }
+    }
+  }
 })

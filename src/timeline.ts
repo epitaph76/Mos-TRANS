@@ -132,6 +132,68 @@ function routeEdges(network: SharedNetwork, vehicleId: string): RouteEdge[] {
   return edges
 }
 
+export type RoadMatch = { position: [number, number]; progressMeters: number; distanceMeters: number }
+
+/** Match a new GPS fix to this vehicle's directed road route, retaining forward progress. */
+export function matchRoadFix(position: [number, number], heading: number | null, speedKmh: number,
+  network: SharedNetwork, vehicleId: string, previousProgressMeters?: number,
+  maxAdvanceMeters = 300, previousPosition?: [number, number]): RoadMatch | null {
+  const edges = routeEdges(network, vehicleId)
+  if (!edges.length) return null
+  const metersLat = 111_320
+  const metersLon = metersLat * Math.cos(edges[0][0][0] * Math.PI / 180)
+  let progress = 0
+  let best: { score: number; value: RoadMatch } | null = null
+  for (const [from, to] of edges) {
+    const dx = (to[1] - from[1]) * metersLon, dy = (to[0] - from[0]) * metersLat
+    const length = Math.hypot(dx, dy)
+    if (length < 1) continue
+    const px = (position[1] - from[1]) * metersLon, py = (position[0] - from[0]) * metersLat
+    const fraction = Math.max(0, Math.min(1, (px * dx + py * dy) / (length * length)))
+    const distance = Math.hypot(px - fraction * dx, py - fraction * dy)
+    if (distance > 120) { progress += length; continue }
+    const along = progress + length * fraction
+    const projected: [number, number] = [from[0] + (to[0] - from[0]) * fraction,
+      from[1] + (to[1] - from[1]) * fraction]
+    const bearing = (Math.atan2(dx, dy) * 180 / Math.PI + 360) % 360
+    const delta = heading === null || speedKmh < 5 ? 0 : Math.abs((bearing - heading + 540) % 360 - 180)
+    const headingPenalty = Math.min(delta, 180) * 0.2
+    const physicalMove = previousPosition ? Math.hypot(
+      (projected[0] - previousPosition[0]) * metersLat,
+      (projected[1] - previousPosition[1]) * metersLon) : 0
+    const jumpPenalty = Math.max(0, physicalMove - maxAdvanceMeters) * 2
+    const progressPenalty = previousProgressMeters === undefined ? 0
+      : Math.min(20, Math.max(0, previousProgressMeters - along - 25) * 0.01)
+    const score = distance + headingPenalty + jumpPenalty + progressPenalty
+    if (!best || score < best.score) best = { score, value: {
+      position: projected,
+      progressMeters: along, distanceMeters: distance,
+    } }
+    progress += length
+  }
+  return best?.value ?? null
+}
+
+/** Move a matched fix forward on the same directed route between NDTP packets. */
+export function pointOnRoadRoute(network: SharedNetwork, vehicleId: string, progressMeters: number): [number, number] | null {
+  const edges = routeEdges(network, vehicleId)
+  if (!edges.length) return null
+  const metersLon = 111_320 * Math.cos(edges[0][0][0] * Math.PI / 180)
+  let covered = 0
+  for (const [from, to] of edges) {
+    const length = Math.hypot((to[1] - from[1]) * metersLon,
+      (to[0] - from[0]) * 111_320)
+    if (length < 1) continue
+    if (covered + length >= progressMeters) {
+      const fraction = Math.max(0, Math.min(1, (progressMeters - covered) / length))
+      return [from[0] + (to[0] - from[0]) * fraction,
+        from[1] + (to[1] - from[1]) * fraction]
+    }
+    covered += length
+  }
+  return edges.length ? edges[edges.length - 1][1] : null
+}
+
 /** Project a displayed marker onto the same road segments used by the route layer. */
 export function snapToVehicleRoute(position: [number, number], network: SharedNetwork,
   vehicleId: string): [number, number] {
