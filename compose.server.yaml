@@ -1,0 +1,59 @@
+services:
+  ml:
+    build:
+      context: .
+      dockerfile: Dockerfile.ml
+    environment:
+      OMP_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+    mem_limit: 220m
+    restart: unless-stopped
+    networks: [internal]
+    logging:
+      options: {max-size: "5m", max-file: "2"}
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    environment:
+      DATASET_PATH: /data/dataset.zip
+      PROCESSED_PATH: /cache/processed
+      ROUTED_PATH: /cache/processed_route
+      DEMO_PATH: /cache/demo
+      ML_URL: http://ml:8001
+      NDTP_PORT: "9201"
+      OMP_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+    volumes:
+      - ./data/dataset.zip:/data/dataset.zip:ro
+      - ./data/cache:/cache
+    mem_limit: 600m
+    ports:
+      - "9201:9201"
+    restart: unless-stopped
+    depends_on: [ml]
+    networks: [internal]
+    logging:
+      options: {max-size: "5m", max-file: "2"}
+  frontend:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.frontend.server
+    ports:
+      - "8080:80"
+    mem_limit: 48m
+    restart: unless-stopped
+    depends_on: [backend]
+    networks:
+      internal:
+      proxy:
+        aliases: [mostrans-frontend]
+    logging:
+      options: {max-size: "5m", max-file: "2"}
+networks:
+  internal:
+  proxy:
+    external: true
+    name: dobrie-dela-max_default

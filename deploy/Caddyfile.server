@@ -1,0 +1,9 @@
+xn--e1agiq1a.xn--p1ai, www.xn--e1agiq1a.xn--p1ai, helpi.135-106-219-68.sslip.io {
+    encode zstd gzip
+    reverse_proxy app:3210
+}
+
+xn--80axeckfde.xn--e1agiq1a.xn--p1ai {
+    encode zstd gzip
+    reverse_proxy mostrans-frontend:80
+}

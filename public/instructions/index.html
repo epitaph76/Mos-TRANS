@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>МосТранс — инструкция для жюри</title>
+  <style>
+    :root { font-family: Inter, Manrope, system-ui, sans-serif; color: #14213d; background: #f4f7fb; }
+    * { box-sizing: border-box; }
+    body { margin: 0; line-height: 1.55; }
+    header { background: #101d39; color: white; padding: 18px max(22px, calc((100vw - 1060px)/2)); display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+    header strong { font-size: 20px; }
+    nav { display: flex; flex-wrap: wrap; gap: 18px; }
+    header a { color: white; text-decoration: none; font-size: 14px; }
+    main { max-width: 1060px; margin: auto; padding: 34px 22px 64px; }
+    h1 { font-size: clamp(30px, 5vw, 44px); line-height: 1.15; margin: 0 0 10px; }
+    h2 { font-size: 21px; margin: 0 0 12px; }
+    h3 { font-size: 16px; margin: 0 0 8px; }
+    p { margin: 8px 0 12px; }
+    a { color: #1766ef; }
+    .lead { color: #52617d; font-size: 17px; margin-bottom: 24px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+    section { background: white; border: 1px solid #dbe4f0; border-radius: 14px; padding: 22px; margin: 0 0 16px; }
+    .callout { border-left: 4px solid #1766ef; background: #eaf2ff; padding: 12px 16px; border-radius: 7px; }
+    .warning { border-left-color: #e59011; background: #fff5e7; }
+    code, pre { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+    code { padding: 2px 4px; background: #edf3fc; border-radius: 4px; word-break: break-word; }
+    pre { background: #101d39; color: #f2f6ff; padding: 16px; border-radius: 9px; overflow: auto; font-size: 13px; white-space: pre-wrap; }
+    pre code { padding: 0; background: none; color: inherit; word-break: normal; }
+    ol { padding-left: 23px; margin: 0; }
+    li { margin: 7px 0; }
+    .links { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
+    .button { display: inline-block; border-radius: 8px; padding: 9px 14px; background: #1766ef; color: white; font-weight: 700; text-decoration: none; border: 0; cursor: pointer; font: inherit; }
+    .button.secondary { background: #e9f0fb; color: #164583; }
+    .small { color: #52617d; font-size: 14px; }
+    .result { min-height: 42px; padding: 12px 14px; border: 1px solid #dbe4f0; background: #f8fbff; border-radius: 9px; margin-top: 12px; }
+    .risk { display: inline-block; margin: 2px 0; padding: 3px 9px; border-radius: 6px; font-weight: 700; }
+    .risk.normal { background: #e5f5e8; color: #16763a; }
+    .risk.minor { background: #fff1c9; color: #825500; }
+    .risk.critical { background: #ffe3e2; color: #b3261e; }
+    .risk.unknown { background: #e9edf3; color: #5a6678; }
+    .metrics { display: flex; flex-wrap: wrap; gap: 12px; }
+    .metric { min-width: 180px; flex: 1; padding: 14px; background: #f5f8fd; border-radius: 9px; }
+    .metric strong { display: block; font-size: 25px; line-height: 1.2; }
+    .metric span { color: #52617d; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <header><strong>МОСТРАНС · жюри</strong><nav><a href="/">Дашборд</a><a href="/docs">Документация</a><a href="/api">Swagger API</a><a href="https://github.com/epitaph76/Mos-TRANS">GitHub</a></nav></header>
+  <main>
+    <h1>Проверка за 5 минут</h1>
+    <p class="lead">Подайте NDTP, проверьте приём и маршрут, затем откройте исторический прогноз и метрики.</p>
+
+    <section>
+      <h2>Адрес и Punycode</h2>
+      <p>Домен в браузере: <code>мостранс.хелпи.рф</code>. Для эмулятора, TCP-клиента и команд используйте его ASCII-запись: <code>xn--80axeckfde.xn--e1agiq1a.xn--p1ai</code>. Браузер обычно преобразует кириллицу сам.</p>
+      <p><strong>NDTP:</strong> <code>xn--80axeckfde.xn--e1agiq1a.xn--p1ai:9201</code> (TCP). <strong>HTTP API:</strong> <code>https://xn--80axeckfde.xn--e1agiq1a.xn--p1ai/api</code> (HTTPS). В <code>targetHost</code> эмулятора укажите только имя без <code>https://</code> и без порта.</p>
+    </section>
+
+    <div class="grid">
+      <section>
+        <h2>1. Подать поток эмулятором</h2>
+        <ol>
+          <li>Из архива организаторов извлеките <code>ndtp-telemetry-emulator.tar</code>.</li>
+          <li>Запустите Docker-образ и передайте конфиг ниже.</li>
+          <li>В конфиге указан <code>unitId=985940</code> и GPS-точка ТС <code>131672</code> из <code>validate/traffic.csv</code>. Координаты фиксированы, время пакета проставляет эмулятор.</li>
+        </ol>
+        <pre><code>docker load -i ndtp-telemetry-emulator.tar
+docker run --rm -p 18080:18080 --name ndtp-emu ndtp-telemetry-emulator:1.0</code></pre>
+        <p class="small">Во втором терминале сохраните JSON как <code>config.json</code> и отправьте его в локальный API эмулятора:</p>
+        <pre><code>{
+  "targetHost": "xn--80axeckfde.xn--e1agiq1a.xn--p1ai",
+  "targetPort": 9201,
+  "units": [{
+    "unitId": 985940, "intervalMs": 5000, "autoGenerate": false,
+    "cells": [{
+      "type": "G6CellNav00",
+      "fields": {
+        "longitude": 378576500, "latitude": 557392120,
+        "extraDopBit5": true, "extraDopBit6": true,
+        "extraDopBit7": true, "speedAvg": 9,
+        "speedMax": 9, "course": 240, "altitude": 158
+      }
+    }]
+  }]
+}</code></pre>
+        <pre><code>curl -X POST http://localhost:18080/api/config \
+  -H "Content-Type: application/json" --data-binary @config.json</code></pre>
+        <p class="small">Остановить отправку: <code>POST /api/config</code> с тем же хостом и портом, но <code>"units": []</code>.</p>
+      </section>
+
+      <section>
+        <h2>2. Подать реальные записи из датасета</h2>
+        <p>Альтернатива эмулятору: скрипт кодирует настоящие строки <code>validate/traffic.csv</code> в тот же NDTP-формат. Нужны репозиторий и архив датасета организаторов.</p>
+        <pre><code>python scripts/send_ndtp_sample.py \
+  --dataset data/dataset.zip \
+  --host xn--80axeckfde.xn--e1agiq1a.xn--p1ai \
+  --port 9201 --vehicle 131672 --count 3</code></pre>
+        <p>Скрипт отправляет handshake и три GPS-пакета <code>unit_id=985940</code>. Их <code>event_time</code> — январь 2026 года; свежесть в живом интерфейсе считается от момента приёма.</p>
+        <h3>Проверка приёма</h3>
+        <ol>
+          <li>Откройте <a href="/api/health"><code>/api/health</code></a>: <code>ndtpFrames</code> растёт, <code>ndtpErrors=0</code>. Handshake тоже входит в счётчик кадров.</li>
+          <li>Откройте <a href="/api/live/snapshot"><code>/api/live/snapshot</code></a>: в <code>vehicles</code> ожидается <code>id=131672</code>, <code>unitId=985940</code>, координаты и <code>nextStop</code>.</li>
+          <li>Откройте <a href="/">дашборд</a>: в мониторе и на карте видно ТС. Пакет остаётся видимым 120 секунд после получения.</li>
+        </ol>
+        <button class="button secondary" type="button" id="check-live">Проверить сервер сейчас</button>
+        <div class="result" id="live-result" aria-live="polite">Нажмите кнопку для проверки.</div>
+      </section>
+    </div>
+
+    <section>
+      <h2>3. Прогнозы и алерты</h2>
+      <p class="callout warning"><strong>Разделение режимов:</strong> текущий дашборд показывает живой NDTP и маршрут. Прогноз задержки по новому NDTP-пакету пока не рассчитывается. Проверенные прогнозы модели доступны в историческом API по данным 6 января 2026 года.</p>
+      <p>Откройте <a href="/api/replay/snapshot?at=50000"><code>/api/replay/snapshot?at=50000</code></a> или кнопку ниже. Поле <code>estimateSeconds</code> — прогноз задержки в секундах; <code>probability</code> — вероятность задержки более 120 секунд. <code>reason</code> и <code>recommendation</code> — объяснение и действие диспетчера.</p>
+      <p>Индикация риска: <span class="risk normal">ниже 70%</span> <span class="risk minor">70–89%</span> <span class="risk critical">от 90%</span>. Это пороги интерфейса; автоматической отправки уведомлений нет.</p>
+      <button class="button" type="button" id="check-forecast">Показать пример прогноза</button>
+      <div class="result" id="forecast-result" aria-live="polite">Нажмите кнопку для примера из исторического датасета.</div>
+    </section>
+
+    <section>
+      <h2>4. Метрики и исходный код</h2>
+      <div class="metrics"><div class="metric"><strong>55,90 с</strong><span>MAE задержки на размеченном test, 353 точки</span></div><div class="metric"><strong>0,1334</strong><span>Brier score вероятности задержки &gt;120 с, групповой holdout</span></div></div>
+      <p class="small">Это офлайн-оценки опубликованного датасета, не качество живого потока или нового дня. Счётчики работы сервера — в <a href="/api/health"><code>/api/health</code></a>.</p>
+      <div class="links"><a href="https://github.com/epitaph76/Mos-TRANS/blob/master/artifacts/route_delay_trend_submission/metrics.json">Метрики регрессии (JSON)</a><a href="https://github.com/epitaph76/Mos-TRANS/blob/master/artifacts/calibrated_probability/metrics.json">Метрики вероятности (JSON)</a><a href="https://github.com/epitaph76/Mos-TRANS/blob/master/README.md">Запуск Docker и исходники</a><a href="/api">Swagger API</a></div>
+    </section>
+  </main>
+  <script>
+    const liveResult = document.getElementById('live-result');
+    const forecastResult = document.getElementById('forecast-result');
+    const getJson = async path => {
+      const response = await fetch(path, { cache: 'no-store' });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return response.json();
+    };
+    document.getElementById('check-live').addEventListener('click', async () => {
+      liveResult.textContent = 'Проверка…';
+      try {
+        const [health, live] = await Promise.all([getJson('/api/health'), getJson('/api/live/snapshot')]);
+        const known = live.vehicles.find(v => v.id === '131672');
+        liveResult.textContent = `Backend: ${health.status}; NDTP кадров: ${health.ndtpFrames}; ошибок: ${health.ndtpErrors}; видимых ТС: ${live.vehicles.length}. ` +
+          (known ? `ТС 131672 найдено, unitId ${known.unitId}, скорость ${known.speed} км/ч.` : 'ТС 131672 сейчас не видно: отправьте пакет и обновите проверку в течение 120 секунд.');
+      } catch (error) { liveResult.textContent = `Проверка не удалась: ${error.message}`; }
+    });
+    document.getElementById('check-forecast').addEventListener('click', async () => {
+      forecastResult.textContent = 'Загрузка…';
+      try {
+        const snapshot = await getJson('/api/replay/snapshot?at=50000');
+        const ranked = snapshot.vehicles.filter(v => Number.isFinite(v.probability)).sort((a, b) => b.probability - a.probability);
+        if (!ranked.length) { forecastResult.textContent = 'В этом срезе прогнозов нет. Проверьте modelStatus в JSON-ответе.'; return; }
+        const vehicle = ranked[0];
+        const chance = Math.round(vehicle.probability * 100);
+        const level = chance >= 90 ? 'Высокий риск' : chance >= 70 ? 'Средний риск' : 'Низкий риск';
+        forecastResult.textContent = `Исторический срез 13:53:20 · ТС ${vehicle.id} · ${level}: ${chance}% · прогноз задержки ${Math.round(vehicle.estimateSeconds)} с. ` +
+          `Причина: ${vehicle.reason || 'не указана'}. Действие: ${vehicle.recommendation || 'не указано'}.`;
+      } catch (error) { forecastResult.textContent = `Прогноз не загрузился: ${error.message}`; }
+    });
+  </script>
+</body>
+</html>

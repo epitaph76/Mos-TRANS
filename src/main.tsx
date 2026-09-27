@@ -1,18 +1,18 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import {
-  Activity, AlertTriangle, ArrowLeft, BarChart3, BusFront, CalendarDays,
-  ChevronDown, ChevronRight, Clock3, Map as MapIcon,
+  Activity, AlertTriangle, ArrowLeft, BarChart3, BusFront,
+  ChevronDown, ChevronRight, Map as MapIcon,
   MapPin, Menu, Route, Search,
-  X, Play, Pause, PanelRightOpen, PanelRightClose,
+  X, PanelRightOpen, PanelRightClose,
 } from 'lucide-react'
 import TransportMap from './TransportMap'
 import plan from './data/plan.json'
 import roadRoutes from './data/road_routes.json'
 import { describeRoutes, type RouteGroup } from './routes'
-import { estimateBetweenFixes, formatTime, stopSeconds, type SharedNetwork } from './timeline'
+import { estimateBetweenFixes, type SharedNetwork } from './timeline'
 import { riskStatus, type RiskStatus } from './risk'
-import DelayExplanation, { type DelayExplanationData } from './DelayExplanation'
+import type { DelayExplanationData } from './DelayExplanation'
 import WhatIf from './WhatIf'
 import './style.css'
 import './detail.css'
@@ -43,11 +43,6 @@ type View = 'map' | 'vehicles' | 'events' | 'analytics'
 type Filter = 'all' | 'normal' | 'deviation' | 'risk'
 type Status = RiskStatus
 
-type Mode = 'replay' | 'live'
-const initialParams = new URLSearchParams(window.location.search)
-const initialMode: Mode = initialParams.get('mode') === 'live' ? 'live' : 'replay'
-const initialAutoplay = initialParams.get('autoplay') === '1'
-const playbackSpeeds = [1, 3, 15, 60, 300, 900]
 const historicalNetwork = { ...plan.network, roadRoutes } as unknown as SharedNetwork
 const historicalRoutes = describeRoutes(plan.vehicles)
 
@@ -99,10 +94,6 @@ function stopName(name: string) {
   return name.replace(/,?\s*д\.?\s*\d+.*$/i, '').trim() || name
 }
 
-function timeOnly(value: string | null) {
-  return value ? value.slice(11, 16) : '—'
-}
-
 function VehicleRow({ vehicle, active, onClick }: { vehicle: Vehicle; active: boolean; onClick: () => void }) {
   const status = statusOf(vehicle)
   return <button className={`vehicle-row ${active ? 'active' : ''}`} onClick={onClick}>
@@ -110,88 +101,10 @@ function VehicleRow({ vehicle, active, onClick }: { vehicle: Vehicle; active: bo
     <span className="row-content">
       <span className="row-heading"><strong>ТС {vehicle.id}</strong><span className={`status-badge ${status}`}>{statusLabelOf(vehicle)}</span></span>
       <span className="row-location"><MapPin size={13} /> {vehicle.nextStop ? stopName(vehicle.nextStop.name) : 'Остановка не указана'}</span>
-      <span className="row-meta"><span><Clock3 size={14} /> {vehicle.nextStop ? timeOnly(vehicle.nextStop.time) : '—'}</span><span><Activity size={14} /> {vehicle.speed} км/ч</span><span className={status !== 'unknown' ? `deviation ${status}` : ''}>{vehicle.probability === null ? '—' : `${Math.round(vehicle.probability * 100)}%`}</span></span>
+      <span className="row-meta"><span><Activity size={14} /> {vehicle.speed} км/ч</span><span className={status !== 'unknown' ? `deviation ${status}` : ''}>{vehicle.probability === null ? '—' : `${Math.round(vehicle.probability * 100)}%`}</span></span>
     </span>
     <ChevronRight className="row-chevron" size={18} />
   </button>
-}
-
-function VehicleDetail({ vehicle, time, day, onBack, onJumpToForecast }: { vehicle: Vehicle; time: number; day: string; onBack: () => void; onJumpToForecast: (seconds: number) => void }) {
-  const status = statusOf(vehicle)
-  const [tab, setTab] = useState<'tracking' | 'analytics' | 'details'>('tracking')
-  const nearestPointLabel = timeOnly(vehicle.nearestForecastPointAt)
-  const unavailableReason = vehicle.forecastAvailability === 'ml_unavailable'
-    ? 'Прогнозная точка есть, но ML-сервис сейчас недоступен.'
-    : vehicle.forecastAvailability === 'pending'
-      ? 'Прогнозная точка есть, ответ модели пока не получен.'
-      : vehicle.forecastAvailability === 'no_target'
-        ? 'По расписанию нет остановки через 10–15 минут.'
-        : vehicle.forecastAvailability === 'bad_gps'
-          ? 'Нет свежей достоверной координаты для расчёта прогноза.'
-          : vehicle.forecastAvailability === 'off_route'
-            ? 'GPS не удалось надёжно сопоставить с плановым маршрутом.'
-            : vehicle.forecastAvailability === 'late_packet'
-              ? 'Получен запоздавший пакет; ожидается новая координата.'
-            : vehicle.forecastAvailability === 'stale_gps'
-              ? 'Новых GPS-пакетов не поступало более двух минут.'
-      : vehicle.nearestForecastPointAt
-        ? `В ${formatTime(time)} для этого ТС нет прогнозной точки. Ближайшая ${vehicle.nearestForecastPointDirection === 'next' ? 'следующая' : 'предыдущая'} — в ${nearestPointLabel}. Исторический датасет размечен отдельными срезами.`
-        : 'Для этого ТС в архиве нет прогнозных точек.'
-  const allStops = vehicle.stops
-    .map(stop => ({ stop, timestamp: stopSeconds(stop.time, day) }))
-    .sort((a, b) => a.timestamp - b.timestamp)
-  const stopEvents = allStops
-  const stopPosition = (index: number) => stopEvents.length <= 1 ? 50 : index / (stopEvents.length - 1) * 100
-  const nextPlannedIndex = stopEvents.findIndex(event => event.timestamp > time)
-  const previousPlannedIndex = nextPlannedIndex === -1 ? stopEvents.length - 1 : nextPlannedIndex - 1
-  const plannedFraction = previousPlannedIndex < 0 || nextPlannedIndex < 0 ? 0 :
-    Math.max(0, Math.min(1, (time - stopEvents[previousPlannedIndex].timestamp) /
-      Math.max(1, stopEvents[nextPlannedIndex].timestamp - stopEvents[previousPlannedIndex].timestamp)))
-  const cursorPercent = stopPosition(Math.max(0, previousPlannedIndex) + plannedFraction)
-  const rulerLabels = [0, 0.25, 0.5, 0.75, 1].map(fraction =>
-    stopEvents.length ? timeOnly(stopEvents[Math.round(fraction * (stopEvents.length - 1))].stop.time) : '—')
-  return <div className="detail-pane">
-    <button className="back-button" onClick={onBack}><ArrowLeft size={17} /> К списку ТС</button>
-    <div className="vehicle-card-heading">
-      <div className="vehicle-card-title"><span className={`detail-bus ${status}`}><BusFront size={25} /></span><div><h2>ТС {vehicle.id}</h2><span className="detail-kicker">Московский наземный транспорт</span></div></div>
-      <span className={`detail-status ${status}`}><span className="status-dot" />{statusLabelOf(vehicle)}</span>
-    </div>
-    <div className="vehicle-meta-grid">
-      <div><span>Ближайшая остановка</span><strong>{vehicle.nextStop ? stopName(vehicle.nextStop.name) : 'Нет данных'}</strong></div>
-      <div><span>Скорость</span><strong>{vehicle.speed} км/ч</strong></div>
-      <div><span>Последний GPS</span><strong>{vehicle.gpsAgeMin < 1 ? 'менее минуты' : `${Math.round(vehicle.gpsAgeMin)} мин`}</strong></div>
-    </div>
-    <div className="detail-forecast-top"><div className="prediction-block"><span className="eyebrow">{vehicle.forecastStale ? 'Последний прогноз задержки' : 'Прогноз задержки через 10–15 минут'}</span><strong className={status}>{minutes(vehicle.estimateSeconds)}</strong><p>{vehicle.probability === null ? unavailableReason : `Вероятность опоздания более чем на 2 минуты: ${Math.round(vehicle.probability * 100)}%.`}</p>{vehicle.probability !== null && vehicle.forecastGeneratedAt && <p>{vehicle.forecastStale ? 'Рассчитан' : 'Обновлено по GPS'} в {timeOnly(vehicle.forecastGeneratedAt)}</p>}{vehicle.forecastStale && <p className="forecast-stale-note">Свежих данных для нового расчёта нет. Показан последний доступный прогноз для остановки в {timeOnly(vehicle.forecastTime)}{vehicle.forecastExpired ? ' (её плановое время прошло)' : ''}.</p>}{['minor', 'critical'].includes(status) && vehicle.estimateSeconds !== null && vehicle.estimateSeconds > 0 && vehicle.delayExplanation && <DelayExplanation data={vehicle.delayExplanation} />}{vehicle.probability === null && vehicle.forecastAvailability === 'no_point' && vehicle.nearestForecastPointAt && <button className="forecast-jump" onClick={() => onJumpToForecast(stopSeconds(vehicle.nearestForecastPointAt!, day))}>Перейти к точке {nearestPointLabel}</button>}</div></div>
-    <div className="detail-tabs" role="tablist" aria-label="Информация о транспортном средстве">
-      <button role="tab" aria-selected={tab === 'tracking'} className={tab === 'tracking' ? 'active' : ''} onClick={() => setTab('tracking')}>Маршрут</button>
-      <button role="tab" aria-selected={tab === 'analytics'} className={tab === 'analytics' ? 'active' : ''} onClick={() => setTab('analytics')}>Аналитика</button>
-      <button role="tab" aria-selected={tab === 'details'} className={tab === 'details' ? 'active' : ''} onClick={() => setTab('details')}>Данные</button>
-    </div>
-    {tab === 'tracking' && <div className="detail-tab-content" role="tabpanel">
-      <div className="tracking-heading"><strong>Остановки по расписанию</strong><span>{formatTime(time)} МСК</span></div>
-      <div className="tracking-ruler" aria-label="Плановые остановки по порядку; расстояние между метками на схеме одинаковое">
-        {rulerLabels.map((label, index) => <span key={index}>{label}</span>)}
-        <div className="tracking-track"><i className="tracking-current" style={{ left: `${cursorPercent}%` }} />{stopEvents.map(({ stop, timestamp }, index) => <i key={`${stop.id}-${index}`} className={`tracking-stop ${timestamp <= time ? 'past' : ''}`} style={{ left: `${stopPosition(index)}%` }} title={`${timeOnly(stop.time)} · ${stopName(stop.name)}`} />)}</div>
-      </div>
-      <p className="tracking-legend">Синие — впереди по расписанию, серые — плановое время уже прошло. Вертикальная линия — выбранный момент.</p>
-      {vehicle.nextStop && <div className="next-stop-feature"><MapPin size={18} /><div><span>Следующая по расписанию</span><strong>{stopName(vehicle.nextStop.name)}</strong><small>План · {timeOnly(vehicle.nextStop.time)}</small></div></div>}
-      <div className="stop-event-list">{stopEvents.length ? stopEvents.map(({ stop, timestamp }, index) => {
-        const state = timestamp <= time ? 'Плановое время прошло' : 'Далее по графику'
-        const intervalMinutes = index ? Math.round((timestamp - stopEvents[index - 1].timestamp) / 60) : 0
-        const interval = index ? intervalMinutes >= 10 ? `Разрыв в расписании ${intervalMinutes} мин · ` : intervalMinutes === 0 ? 'В ту же минуту · ' : `Интервал ${intervalMinutes} мин · ` : ''
-        return <div className={`stop-event ${intervalMinutes >= 10 ? 'schedule-gap' : ''}`} key={`${stop.id}-${index}`}><span className={`stop-event-dot ${timestamp <= time ? 'past' : ''}`} /><time>{timeOnly(stop.time)}</time><span>{stopName(stop.name)}</span><small>{interval}{state}</small></div>
-      }) : <p className="empty-stop-events">Нет плановых остановок для выбранного времени.</p>}</div>
-    </div>}
-    {tab === 'analytics' && <div className="detail-tab-content" role="tabpanel">
-      {vehicle.probability !== null && <div className="detail-section"><h3>Карточка риска</h3><div className="metric-line"><span>Целевая остановка</span><strong>{vehicle.forecastStop ? stopName(vehicle.forecastStop.name) : vehicle.forecastStopId}</strong></div><div className="metric-line"><span>Плановое прибытие</span><strong>{timeOnly(vehicle.forecastTime)}</strong></div><div className="metric-line"><span>Участок маршрута</span><strong>{vehicle.section ?? 'Участок не определён'}</strong></div><div className="metric-line"><span>Наблюдаемый сигнал</span><strong>{vehicle.reason ?? 'Не определён'}</strong></div><div className="metric-line"><span>Действие</span><strong>{vehicle.recommendation ?? 'Наблюдать'}</strong></div></div>}
-      <div className="detail-section"><h3>Показатели движения</h3><div className="metric-line"><span>Скорость</span><strong>{vehicle.speed} км/ч</strong></div><div className="metric-line"><span>Средняя скорость за 5 минут</span><strong>{vehicle.meanSpeed5m === null ? '—' : `${Math.round(vehicle.meanSpeed5m)} км/ч`}</strong></div><div className="metric-line"><span>Средняя скорость на участке</span><strong>{vehicle.segmentSpeedMeanKmh === null ? '—' : `${Math.round(vehicle.segmentSpeedMeanKmh)} км/ч`}</strong></div><div className="metric-line"><span>Текущий простой</span><strong>{vehicle.stoppedDurationSeconds === null ? '—' : `${Math.round(vehicle.stoppedDurationSeconds)} с`}</strong></div><div className="metric-line"><span>Текущее отклонение</span><strong>{minutes(vehicle.currentDeviationSeconds)}</strong></div><div className="metric-line"><span>Прогноз отклонения</span><strong>{minutes(vehicle.estimateSeconds)}</strong></div></div>
-    </div>}
-    {tab === 'details' && <div className="detail-tab-content" role="tabpanel">
-      <div className="detail-section"><h3>Телеметрия</h3><div className="metric-line"><span>Последний GPS</span><strong>{vehicle.gpsAgeMin < 1 ? 'менее минуты назад' : `${Math.round(vehicle.gpsAgeMin)} мин назад`}</strong></div><div className="metric-line"><span>Положение на карте</span><strong>{vehicle.positionMethod === 'route' ? 'Расчёт по маршруту и последней скорости' : vehicle.positionMethod === 'heading' ? 'Расчёт по курсу и последней скорости' : 'Последний полученный GPS'}</strong></div><div className="metric-line"><span>Двери</span><strong>{vehicle.doorStatus ?? 'Нет данных в историческом CSV'}</strong></div></div>
-      {vehicle.forecastTime && <div className="detail-section"><h3>Прогнозная точка</h3><div className="metric-line"><span>Целевая остановка</span><strong>{timeOnly(vehicle.forecastTime)}</strong></div><div className="metric-line"><span>ID точки</span><strong>{vehicle.sampleId}</strong></div></div>}
-      <div className="detail-section"><h3>Данные</h3><div className="metric-line"><span>Источник</span><strong>{vehicle.source}</strong></div><div className="metric-line"><span>Время среза</span><strong>{formatTime(time)} МСК</strong></div><div className="metric-line"><span>Свежесть GPS</span><strong>{vehicle.stale ? 'Последняя позиция устарела' : 'Актуальная позиция'}</strong></div></div>
-    </div>}
-  </div>
 }
 
 function statusLabelOf(vehicle: Vehicle): string {
@@ -211,15 +124,16 @@ function InactiveRouteDetail({ id, onBack }: { id: string; onBack: () => void })
     <button className="back-button" onClick={onBack}><ArrowLeft size={17} /> К списку ТС</button>
     <div className="detail-heading"><span className="detail-bus"><Route size={27} /></span><div><div className="detail-kicker">Выбранная траектория</div><h2>ТС {id}</h2></div></div>
     <div className="detail-status">Нет актуальной позиции</div>
-    <div className="prediction-block"><p>В выбранный момент свежей телеметрии нет. На карте показана траектория по доступным GPS-точкам за день. Выберите другое время на шкале, чтобы увидеть движение ТС.</p></div>
+    <div className="prediction-block"><p>Сейчас от этого ТС нет свежей телеметрии NDTP. На карте показан его маршрут из датасета.</p></div>
   </div>
 }
 
 function LiveDetail({ vehicle, onBack }: { vehicle: Vehicle; onBack: () => void }) {
+  const knownRoute = vehicle.stops.length > 0
   return <div className="detail-pane">
     <button className="back-button" onClick={onBack}><ArrowLeft size={17} /> К списку ТС</button>
-    <div className="vehicle-card-heading"><div className="vehicle-card-title"><span className="detail-bus unknown"><BusFront size={25} /></span><div><h2>Устройство {vehicle.id}</h2><span className="detail-kicker">Живой поток NDTP</span></div></div></div>
-    <div className="prediction-block"><span className="eyebrow">Прогноз недоступен</span><p>Эмулятор не привязан к плановому расписанию. Его случайную траекторию нельзя оценивать как рейс.</p></div>
+    <div className="vehicle-card-heading"><div className="vehicle-card-title"><span className="detail-bus unknown"><BusFront size={25} /></span><div><h2>{knownRoute ? `ТС ${vehicle.id}` : `Устройство ${vehicle.id}`}</h2><span className="detail-kicker">Живой поток NDTP</span></div></div></div>
+    <div className="prediction-block"><span className="eyebrow">{knownRoute ? 'Маршрут найден в датасете' : 'Маршрут не найден'}</span><p>{knownRoute ? `Пакет принят и сопоставлен с плановым маршрутом.${vehicle.nextStop ? ` Ближайшая следующая остановка: ${vehicle.nextStop.name}.` : ''} Прогноз задержки по живому потоку пока недоступен.` : 'Идентификатор устройства отсутствует в validate/traffic.csv.'}</p></div>
     <div className="detail-section"><h3>Телеметрия</h3><div className="metric-line"><span>Скорость</span><strong>{vehicle.speed} км/ч</strong></div><div className="metric-line"><span>Последний GPS</span><strong>{Math.round(vehicle.gpsAgeMin * 60)} с назад</strong></div><div className="metric-line"><span>Координаты</span><strong>{vehicle.position[0].toFixed(5)}, {vehicle.position[1].toFixed(5)}</strong></div><div className="metric-line"><span>Двери</span><strong>{vehicle.doorStatus ?? 'Нет данных от устройства'}</strong></div><div className="metric-line"><span>Источник</span><strong>{vehicle.source}</strong></div></div>
   </div>
 }
@@ -241,9 +155,9 @@ function RouteList({ vehicles, routes, select, selectRoute }: {
         const next = expanded === route.id ? null : route.id
         setExpanded(next)
         selectRoute(route.id === 'unassigned' || !next ? '' : route.buses[0].id)
-      }}><span className="route-group-icon"><Route size={19} /></span><span className="route-group-text"><strong>{route.title}</strong><small>{route.buses.length} ТС в выбранный момент</small></span><ChevronDown size={17} /></button>
+      }}><span className="route-group-icon"><Route size={19} /></span><span className="route-group-text"><strong>{route.title}</strong><small>{route.buses.length} ТС сейчас</small></span><ChevronDown size={17} /></button>
       {expanded === route.id && <div className="route-buses">{route.buses.map(vehicle => <button key={vehicle.id} className="route-bus-button" onClick={() => select(vehicle.id)}><BusFront size={18} /><span><strong>ТС {vehicle.id}</strong><small>{vehicle.nextStop ? `Следующая: ${stopName(vehicle.nextStop.name)}` : 'Остановка не указана'}</small></span><span className={`status-badge ${statusOf(vehicle)}`}>{statusLabelOf(vehicle)}</span><ChevronRight size={16} /></button>)}</div>}
-    </div>) : <div className="empty-state">В выбранный момент транспорта нет</div>}</div>
+    </div>) : <div className="empty-state">Сейчас нет транспорта с актуальной телеметрией</div>}</div>
   </div>
 }
 
@@ -258,7 +172,7 @@ function DataView({ view, vehicles, select, routes, selectRoute }: {
   }
   const title = view === 'events' ? 'События' : 'Транспорт на линии'
   const shown = view === 'events' ? vehicles.filter(v => ['minor', 'critical'].includes(statusOf(v))) : vehicles
-  return <div className="data-view"><div className="data-intro"><h2>{title}</h2><p>{view === 'events' ? 'Отклонения от расписания в выбранном срезе' : 'Текущие координаты и состояние транспорта'}</p></div><div className="list-grid">{shown.length ? shown.map(v => <button className="grid-row" key={v.id} onClick={() => select(v.id)}><span className={`row-icon ${statusOf(v)}`}><BusFront size={21} /></span><span><strong>ТС {v.id}</strong><small>{v.nextStop ? stopName(v.nextStop.name) : 'Без остановки'}</small></span><span className={`status-badge ${statusOf(v)}`}>{statusLabelOf(v)}</span><ChevronRight size={18} /></button>) : <div className="empty-state">В этом срезе событий нет</div>}</div></div>
+  return <div className="data-view"><div className="data-intro"><h2>{title}</h2><p>{view === 'events' ? 'События по текущей телеметрии' : 'Текущие координаты и состояние транспорта'}</p></div><div className="list-grid">{shown.length ? shown.map(v => <button className="grid-row" key={v.id} onClick={() => select(v.id)}><span className={`row-icon ${statusOf(v)}`}><BusFront size={21} /></span><span><strong>ТС {v.id}</strong><small>{v.nextStop ? stopName(v.nextStop.name) : 'Без остановки'}</small></span><span className={`status-badge ${statusOf(v)}`}>{statusLabelOf(v)}</span><ChevronRight size={18} /></button>) : <div className="empty-state">Сейчас событий нет</div>}</div></div>
 }
 
 const navItems: { id: View; label: string; icon: React.ElementType }[] = [
@@ -269,19 +183,11 @@ const navItems: { id: View; label: string; icon: React.ElementType }[] = [
 ]
 
 function App() {
-  const [time, setTime] = useState(plan.start)
-  const [playing, setPlaying] = useState(initialAutoplay)
-  const [mode, setMode] = useState<Mode>(initialMode)
   const activePlan = plan
-  const startTime = activePlan.start
-  const endTime = activePlan.end
   const network = historicalNetwork
   const [vehicles, setVehicles] = useState<Vehicle[]>([])
   const [apiError, setApiError] = useState<string | null>(null)
   const [modelStatus, setModelStatus] = useState('ready')
-  const timeRef = useRef(time)
-  timeRef.current = time
-  const [speed, setSpeed] = useState(60)
   const [monitorCollapsed, setMonitorCollapsed] = useState(false)
   const [view, setView] = useState<View>('map')
   const [filter, setFilter] = useState<Filter>('all')
@@ -291,36 +197,16 @@ function App() {
   const [showRoutes, setShowRoutes] = useState(true)
   const [mobileNav, setMobileNav] = useState(false)
   useEffect(() => {
-    if (!playing) return
-    let previous = performance.now()
-    const timer = window.setInterval(() => {
-      const now = performance.now()
-      const elapsed = Math.min((now - previous) / 1000, 1)
-      previous = now
-      setTime(current => Math.min(endTime, current + elapsed * speed))
-    }, 100)
-    return () => window.clearInterval(timer)
-  }, [playing, speed, endTime])
-  useEffect(() => {
-    if (time >= endTime) setPlaying(false)
-  }, [time, endTime])
-  useEffect(() => {
     let mounted = true
     let busy = false
-    let lastRequestedTime = -1
     const load = async () => {
       if (busy) return
-      const requestedTime = Math.floor(timeRef.current)
-      if (mode !== 'live' && requestedTime === lastRequestedTime) return
       busy = true
       try {
-        const url = mode === 'live' ? '/api/live/snapshot'
-          : `/api/${mode}/snapshot?at=${requestedTime}${mode === 'replay' && speed === 1 ? '&on_demand=true' : ''}`
-        const response = await fetch(url)
+        const response = await fetch('/api/live/snapshot')
         if (!response.ok) throw new Error(`API ${response.status}`)
         const state = await response.json()
         if (mounted) {
-          if (state.modelStatus !== 'unavailable') lastRequestedTime = requestedTime
           setVehicles((state.vehicles as (Partial<Vehicle> & { id: string })[]).map(normalizeVehicle).filter((v): v is Vehicle => v !== null))
           setModelStatus(state.modelStatus ?? 'ready')
           setApiError(null)
@@ -330,23 +216,14 @@ function App() {
       } finally { busy = false }
     }
     void load()
-    const timer = window.setInterval(() => { void load() }, mode === 'live' ? 1000 : 400)
+    const timer = window.setInterval(() => { void load() }, 1000)
     return () => { mounted = false; window.clearInterval(timer) }
-  }, [mode, speed])
-  const displayVehicles = mode === 'live' ? vehicles.map(vehicle => {
+  }, [])
+  const displayVehicles = vehicles.map(vehicle => {
     const estimated = estimateBetweenFixes(vehicle.position, vehicle.speed, vehicle.heading,
       Math.max(0, vehicle.gpsAgeMin * 60), network, vehicle.id)
     return { ...vehicle, position: estimated.position, heading: estimated.heading ?? vehicle.heading,
       positionMethod: estimated.method }
-  }) : vehicles.flatMap(vehicle => {
-    if (!vehicle.gpsEventTime) return [vehicle]
-    const fixTime = stopSeconds(vehicle.gpsEventTime, activePlan.date)
-    if (fixTime > time) return []
-    const estimated = estimateBetweenFixes(vehicle.position, vehicle.speed, vehicle.heading,
-      time - fixTime, network, vehicle.id)
-    return [{ ...vehicle, position: estimated.position, heading: estimated.heading ?? vehicle.heading,
-      positionMethod: estimated.method,
-      gpsAgeMin: (time - fixTime) / 60 }]
   })
   const selected = displayVehicles.find(v => v.id === selectedId) ?? null
   const filtered = displayVehicles.filter(v => {
@@ -357,21 +234,6 @@ function App() {
     return `${v.id} ${v.nextStop?.name ?? ''}`.toLocaleLowerCase('ru').includes(search.toLocaleLowerCase('ru'))
   })
   const countRisk = displayVehicles.filter(v => statusOf(v) === 'critical').length
-  const switchMode = (next: Mode) => {
-    const url = new URL(window.location.href)
-    url.searchParams.delete('autoplay')
-    url.searchParams.delete('demo')
-    if (next === 'live') url.searchParams.set('mode', 'live')
-    else url.searchParams.delete('mode')
-    window.history.replaceState(null, '', url)
-    setMode(next)
-    setPlaying(false)
-    setTime(plan.start)
-    setSelectedId(null)
-    setSelectedRouteId(null)
-    setVehicles([])
-    setSpeed(60)
-  }
   const select = useCallback((id: string) => {
     setSelectedId(id || null)
     setSelectedRouteId(null)
@@ -397,13 +259,12 @@ function App() {
     </aside>
     {mobileNav && <button className="mobile-scrim" aria-label="Закрыть меню" onClick={() => setMobileNav(false)} />}
     <main className="main-area">
-      <header className="topbar"><div className="topbar-title"><button className="mobile-menu" aria-label="Открыть меню" onClick={() => setMobileNav(true)}><Menu size={22} /></button><h1>{view === 'map' ? 'Карта' : navItems.find(item => item.id === view)?.label}</h1></div><div className="topbar-actions"><div className="mode-picker" aria-label="Источник данных"><button className={mode === 'replay' ? 'active' : ''} onClick={() => switchMode('replay')}>История</button><button className={mode === 'live' ? 'active' : ''} onClick={() => switchMode('live')}>NDTP</button></div><div className="date-chip"><CalendarDays size={16} /> {mode === 'live' ? 'Прямой эфир' : activePlan.date}</div><div className="time-select"><Clock3 size={17} />{mode === 'live' ? 'сейчас' : `${formatTime(time, true)} МСК`}</div></div></header>
+      <header className="topbar"><div className="topbar-title"><button className="mobile-menu" aria-label="Открыть меню" onClick={() => setMobileNav(true)}><Menu size={22} /></button><h1>{view === 'map' ? 'Карта' : navItems.find(item => item.id === view)?.label}</h1></div></header>
       {apiError && <div className="service-banner">Нет связи с backend: {apiError}. Показано последнее полученное состояние.</div>}
       {modelStatus === 'unavailable' && !apiError && <div className="service-banner">ML-сервис недоступен: положение ТС обновляется, новые прогнозы временно не рассчитываются.</div>}
-      {mode !== 'live' && <div className="timeline-bar"><button className="play-button" onClick={() => { if (time >= endTime) setTime(startTime); setPlaying(!playing || time >= endTime) }} aria-label={playing ? 'Пауза' : 'Воспроизвести'} title={playing ? 'Пауза' : 'Воспроизвести'}>{playing ? <Pause size={16} fill="currentColor" /> : <Play size={16} fill="currentColor" />}</button><span className="timeline-time">{formatTime(time, true)}</span><input className="time-slider" type="range" min={startTime} max={endTime} step="1" value={time} onChange={event => { setPlaying(false); setTime(Number(event.target.value)) }} aria-valuetext={`${formatTime(time, true)} МСК`} aria-label="Выбрать время в датасете" style={{ background: `linear-gradient(to right, #1766ef ${(time - startTime) / (endTime - startTime) * 100}%, #dce5f2 0)` }} /><span className="timeline-end">{formatTime(endTime)}</span><label className="speed-control">Скорость <select value={speed} onChange={event => setSpeed(Number(event.target.value))} aria-label="Скорость воспроизведения">{playbackSpeeds.map(value => <option key={value} value={value}>{value}×</option>)}</select><ChevronDown size={13} /></label></div>}
       <div className="workspace">
         <section className="primary-panel">
-          {view === 'map' ? <TransportMap vehicles={displayVehicles} selected={selected} selectedId={selectedRouteId ?? selectedId} onSelect={select} onRouteSelect={selectRoute} showRoutes={showRoutes} setShowRoutes={setShowRoutes} collapsed={monitorCollapsed} network={network} replayTime={mode === 'live' ? null : time} /> : <DataView view={view} vehicles={displayVehicles} select={select} routes={mode === 'live' ? [] : historicalRoutes} selectRoute={selectRouteInList} />}
+          {view === 'map' ? <TransportMap vehicles={displayVehicles} selected={selected} selectedId={selectedRouteId ?? selectedId} onSelect={select} onRouteSelect={selectRoute} showRoutes={showRoutes} setShowRoutes={setShowRoutes} collapsed={monitorCollapsed} network={network} replayTime={null} /> : <DataView view={view} vehicles={displayVehicles} select={select} routes={historicalRoutes} selectRoute={selectRouteInList} />}
         </section>
         {monitorCollapsed && <button className="restore-monitor" onClick={() => setMonitorCollapsed(false)} title="Открыть мониторинг" aria-label="Открыть мониторинг"><PanelRightOpen size={19} /></button>}
         {monitorCollapsed ? null : <aside className="right-panel">
@@ -412,7 +273,7 @@ function App() {
             <RouteDetail id={selectedRouteId} stops={activePlan.vehicles.find(vehicle => vehicle.id === selectedRouteId)?.stops ?? []} onBack={() => setSelectedRouteId(null)} />
           </> : selectedId ? <>
             <button className="collapse-detail" onClick={() => setMonitorCollapsed(true)} title="Свернуть мониторинг" aria-label="Свернуть мониторинг"><PanelRightClose size={18} /></button>
-            {selected ? mode === 'live' ? <LiveDetail vehicle={selected} onBack={() => setSelectedId(null)} /> : <VehicleDetail vehicle={selected} time={time} day={activePlan.date} onBack={() => setSelectedId(null)} onJumpToForecast={pointTime => { setPlaying(false); setTime(pointTime) }} /> : <InactiveRouteDetail id={selectedId} onBack={() => setSelectedId(null)} />}
+            {selected ? <LiveDetail vehicle={selected} onBack={() => setSelectedId(null)} /> : <InactiveRouteDetail id={selectedId} onBack={() => setSelectedId(null)} />}
           </> : <>
             <div className="panel-header">
               <button className="monitor-heading" onClick={() => setMonitorCollapsed(true)} title="Свернуть мониторинг"><span className="eyebrow">МОНИТОРИНГ</span><span className="monitor-title">Транспорт на линии <span>{displayVehicles.length}</span></span></button>
@@ -421,7 +282,7 @@ function App() {
             <div className="search-box"><Search size={18} /><input value={search} onChange={e => setSearch(e.target.value)} placeholder="Номер ТС или остановка" aria-label="Поиск транспорта" />{search && <button aria-label="Очистить поиск" onClick={() => setSearch('')}><X size={16} /></button>}</div>
             <div className="filter-row"><button className={filter === 'all' ? 'active' : ''} onClick={() => setFilter('all')}>Все</button><button className={filter === 'deviation' ? 'active' : ''} onClick={() => setFilter('deviation')}>Отклонения</button><button className={filter === 'risk' ? 'active' : ''} onClick={() => setFilter('risk')}>Риск</button></div>
             <div className="vehicle-list">{filtered.length ? filtered.map(vehicle => <VehicleRow key={vehicle.id} vehicle={vehicle} active={false} onClick={() => setSelectedId(vehicle.id)} />) : <div className="empty-state">Транспорт не найден</div>}</div>
-            <div className="panel-footer"><span className="footer-dot" /> {filtered.length} из {displayVehicles.length} ТС · {mode === 'live' ? 'прямой эфир' : `${formatTime(time)} МСК`}</div>
+            <div className="panel-footer"><span className="footer-dot" /> {filtered.length} из {displayVehicles.length} ТС · прямой эфир</div>
           </>}
         </aside>}
       </div>

@@ -18,7 +18,7 @@ from fastapi import FastAPI, HTTPException, Query
 from mos_trans.features.build import build_feature_set
 from mos_trans.demo import generate as generate_demo
 from mos_trans.inference import FORBIDDEN, json_records
-from mos_trans.ndtp import LiveStore
+from mos_trans.ndtp import LiveCatalog, LiveStore
 from mos_trans.preprocessing.core import DataSource, _point, _time, build_dataset, clean_traffic_row
 from mos_trans.stream_forecast import STREAM_VERSION, build_stream_features
 
@@ -384,7 +384,7 @@ async def lifespan(app: FastAPI):
                               status_path=routed / "stream" / "stream_status.parquet")
     demo_archive, demo_features = generate_demo(Path(os.getenv("DEMO_PATH", "data/demo")))
     app.state.demo = Replay(demo_archive, demo_features, "Синтетический учебный рейс", full_route=True)
-    app.state.live = LiveStore()
+    app.state.live = LiveStore(LiveCatalog(dataset))
     app.state.client = httpx.AsyncClient()
     app.state.ml_url = os.getenv("ML_URL", "http://127.0.0.1:8001").rstrip("/")
     scorer = asyncio.create_task(app.state.replay.score_all(app.state.ml_url, app.state.client))
@@ -404,7 +404,8 @@ async def lifespan(app: FastAPI):
         await app.state.client.aclose()
 
 
-app = FastAPI(title="Mos-TRANS Dispatcher", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="Mos-TRANS Dispatcher", version="1.0.0", lifespan=lifespan,
+              docs_url="/api", redoc_url=None, openapi_url="/api/openapi.json")
 
 
 @app.get("/api/health")

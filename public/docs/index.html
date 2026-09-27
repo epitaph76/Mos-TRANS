@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>МосТранс — документация</title>
+  <style>
+    :root { color-scheme: light; font-family: Manrope, Inter, system-ui, sans-serif; color: #14213d; background: #f4f7fb; }
+    * { box-sizing: border-box; }
+    body { margin: 0; line-height: 1.6; }
+    header { background: #101d39; color: white; padding: 24px max(24px, calc((100vw - 1120px)/2)); display: flex; justify-content: space-between; align-items: center; gap: 20px; }
+    header strong { font-size: 22px; }
+    a { color: #1766ef; }
+    header a { color: white; text-decoration: none; }
+    main { max-width: 1120px; margin: 0 auto; padding: 48px 24px 80px; }
+    h1 { font-size: clamp(32px, 5vw, 48px); line-height: 1.1; margin: 0 0 16px; }
+    h2 { margin-top: 0; font-size: 25px; }
+    h3 { margin-bottom: 6px; }
+    .lead { font-size: 19px; max-width: 760px; color: #52617d; margin-bottom: 35px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
+    section { background: white; border: 1px solid #dce4f0; border-radius: 16px; padding: 28px; margin-bottom: 20px; box-shadow: 0 4px 18px #13203b08; }
+    code, pre { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+    code { background: #edf3fc; padding: 2px 5px; border-radius: 4px; }
+    pre { background: #101d39; color: #ecf2ff; padding: 18px; border-radius: 10px; overflow-x: auto; white-space: pre-wrap; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid #e3e8f0; vertical-align: top; }
+    th { color: #52617d; }
+    .button { display: inline-block; background: #1766ef; color: white; text-decoration: none; border-radius: 8px; padding: 10px 16px; font-weight: 700; }
+    .muted { color: #52617d; }
+    ul { padding-left: 22px; }
+  </style>
+</head>
+<body>
+  <header><strong>МосТранс</strong><nav><a href="/">Диспетчерская</a> &nbsp;·&nbsp; <a href="/instructions">Инструкция для жюри</a> &nbsp;·&nbsp; <a href="/api">Swagger API</a></nav></header>
+  <main>
+    <h1>Документация проекта</h1>
+    <p class="lead">Система принимает телеметрию транспорта по NDTP, показывает положение ТС на маршрутах из датасета и предоставляет исторический прогноз задержек.</p>
+    <div class="grid">
+      <section><h2>Поток NDTP</h2><p>TCP-приёмник: <code>мостранс.хелпи.рф:9201</code>. После подключения терминал отправляет <code>NPH_SGC_CONN_REQUEST</code>, затем сообщения <code>NPH_SND_REALTIME</code> с навигационной ячейкой <code>G6CellNav00</code>. Формат соответствует эмулятору из архива датасета.</p><p>Полученный <code>peerAddress</code> сопоставляется с <code>unit_id</code> в <code>validate/traffic.csv</code>; по <code>tr_id</code> находятся остановки в <code>validate/schedule_plan.csv</code>. Координаты, скорость и направление берутся из пакета.</p></section>
+      <section><h2>Диспетчерская</h2><p><a href="/">Карта</a> показывает принятые за последние 120 секунд пакеты NDTP на маршрутах датасета. Для диагностики архива 6 января 2026 года доступен HTTP-метод <code>/api/replay/snapshot</code>.</p><p>Прогноз задержки непосредственно по новому NDTP-пакету пока не рассчитывается; в диспетчерской отображаются приём, положение и маршрут.</p></section>
+    </div>
+    <section><h2>HTTP API</h2><table><thead><tr><th>Метод и адрес</th><th>Назначение</th></tr></thead><tbody>
+      <tr><td><code>GET /api/health</code></td><td>Готовность backend, число принятых NDTP-кадров и ошибок.</td></tr>
+      <tr><td><code>GET /api/live/snapshot</code></td><td>Последняя телеметрия, привязка ТС к маршруту и ближайшая остановка.</td></tr>
+      <tr><td><code>GET /api/replay/snapshot?at=SECONDS</code></td><td>Срез исторического воспроизведения; <code>at</code> — секунды от полуночи в дне датасета.</td></tr>
+      <tr><td><code>GET /api/demo/snapshot?at=SECONDS</code></td><td>Учебный синтетический рейс.</td></tr>
+      <tr><td><code>GET /api/openapi.json</code></td><td>Машиночитаемая схема OpenAPI.</td></tr>
+    </tbody></table><p><a class="button" href="/api">Открыть Swagger API</a></p></section>
+    <section><h2>Проверка подачи данных</h2><p>Из корня репозитория отправьте несколько настоящих GPS-записей из <code>validate/traffic.csv</code>. Скрипт выбирает записи ТС <code>131672</code> перед первой точкой прогноза и кодирует их в NDTP так же, как эмулятор:</p><pre>python scripts/send_ndtp_sample.py --dataset data/dataset.zip --host 135.106.219.68 --port 9201 --vehicle 131672 --count 3</pre><p>После отправки проверьте <a href="/api/health"><code>/api/health</code></a> (счётчик <code>ndtpFrames</code>) и <a href="/api/live/snapshot"><code>/api/live/snapshot</code></a> (ТС <code>131672</code>, координаты и остановки). В архиве метки времени относятся к январю 2026 года; для отображения свежести в прямом эфире используется время приёма кадра.</p></section>
+    <section><h2>Формат и границы данных</h2><ul><li>NDTP: little-endian, заголовки NPL 15 байт и NPH 10 байт, CRC-16/Modbus.</li><li>Идентификатор терминала — <code>unit_id</code>, транспортного средства — <code>tr_id</code>. Для validate они сопоставляются однозначно.</li><li>Схема проверочных точек: <code>sample_id</code>, <code>tr_id</code>, <code>T</code>, <code>target_stop_id</code>, <code>target_time_begin</code>, <code>cur_dev_s</code>.</li><li>Для исторического прогноза используются только пакеты с <code>event_time ≤ T</code> и <code>receive_time ≤ T</code>.</li></ul><p class="muted">Swagger содержит актуальные HTTP-маршруты backend. Приём NDTP работает по TCP и поэтому не вызывается через Swagger.</p></section>
+  </main>
+</body>
+</html>

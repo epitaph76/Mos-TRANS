@@ -14,3 +14,8 @@ __pycache__/
 node_modules/
 dist/
 *.tsbuildinfo
+
+# Deployment artifacts kept only on the server
+/build-*.log
+/test-python.log
+/deploy/frontend.tar.gz

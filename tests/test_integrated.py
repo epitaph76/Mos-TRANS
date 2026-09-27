@@ -3,16 +3,18 @@
 from __future__ import annotations
 
 import asyncio
+import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from zipfile import ZipFile
 
 import numpy as np
 import pandas as pd
 
 from mos_trans.backend_api import Replay, explanation
 from mos_trans.inference import Predictor, prediction_frame
-from mos_trans.ndtp import NAV, NPH, NPL, LiveStore, crc16_modbus, parse_frame
+from mos_trans.ndtp import NAV, NPH, NPL, LiveCatalog, LiveStore, Navigation, crc16_modbus, parse_frame
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -24,6 +26,25 @@ def frame(payload: bytes, unit_id: int = 42) -> tuple[bytes, bytes]:
 
 
 class NdtpTests(unittest.IsolatedAsyncioTestCase):
+    def test_dataset_unit_maps_to_planned_route(self):
+        with tempfile.TemporaryDirectory() as directory:
+            dataset = Path(directory) / "dataset.zip"
+            with ZipFile(dataset, "w") as archive:
+                archive.writestr("validate/traffic.csv", "unit_id,tr_id\n985940,131672\n")
+                archive.writestr("validate/schedule_plan.csv",
+                                 "tr_id,tt_action_item_id,time_begin,geom,building_address\n"
+                                 "131672,1,2026-01-06 03:35:00,POINT (37.1 55.1),First\n"
+                                 "131672,2,2026-01-06 03:40:00,POINT (37.2 55.2),Second\n")
+            catalog = LiveCatalog(dataset)
+            store = LiveStore(catalog)
+            now = datetime.now(timezone.utc)
+            store.latest[985940] = Navigation(985940, datetime(2026, 1, 6, 3, 37, tzinfo=timezone.utc),
+                                              now, 37.15, 55.15, 25, 90)
+            vehicle = store.snapshot()["vehicles"][0]
+            self.assertEqual(vehicle["id"], "131672")
+            self.assertEqual(vehicle["nextStop"]["name"], "Second")
+            self.assertLess(vehicle["gpsAgeMin"], 0.1)
+
     def test_navigation_frame_and_crc(self):
         nav = NAV.pack(1767673800, 376173210, 557551234, 0xE0, 0, 25, 30, 90, 0, 150, 8, 2)
         header, payload = frame(NPH.pack(1, 101, 1, 2) + bytes([0, 0]) + nav)
