@@ -101,12 +101,17 @@ class Replay:
         self.stream = status_path is not None
         self.status_times: dict[str, list[datetime]] = {}
         self.status_rows: dict[str, list] = {}
+        self.ready_times: dict[str, list[datetime]] = {}
+        self.ready_ids: dict[str, list[str]] = {}
         if status_path is not None:
             status_frame = pd.read_parquet(status_path).sort_values(
                 ["available_time", "event_time", "packet_id"], kind="stable")
             for vehicle, group in status_frame.groupby("tr_id", sort=False):
                 self.status_times[str(vehicle)] = group.available_time.tolist()
                 self.status_rows[str(vehicle)] = list(group.itertuples(index=False))
+                ready = group[group.availability == "ready"]
+                self.ready_times[str(vehicle)] = ready.available_time.tolist()
+                self.ready_ids[str(vehicle)] = ready.sample_id.astype(str).tolist()
         self.stops: dict[str, list[dict]] = defaultdict(list)
         self.gps: dict[str, tuple[list[datetime], list]] = {}
         source = DataSource(dataset)
@@ -168,6 +173,24 @@ class Replay:
         i = bisect_right(times, at) - 1
         return best_at[i] if i >= 0 else None
 
+    def latest_forecast_row(self, vehicle: str, at: datetime,
+                            exclude_sample_id: str | None = None) -> pd.Series | None:
+        """The last forecast made available by this replay time, never a future row."""
+        if self.stream:
+            times = self.ready_times.get(vehicle, [])
+            ids = self.ready_ids.get(vehicle, [])
+            index = bisect_right(times, at) - 1
+            if index >= 0 and ids[index] == exclude_sample_id:
+                index -= 1
+            return self.rows_by_id.get(ids[index]) if index >= 0 else None
+        times = self.row_times.get(vehicle, [])
+        index = bisect_right(times, at) - 1
+        if index >= 0 and str(self.vehicle_rows[vehicle][index].sample_id) == exclude_sample_id:
+            index -= 1
+        if index < 0:
+            return None
+        return self.rows_by_id.get(str(self.vehicle_rows[vehicle][index].sample_id))
+
     async def ensure_predictions(self, rows: pd.DataFrame, ml_url: str, client: httpx.AsyncClient) -> str:
         missing = rows.loc[~rows.sample_id.astype(str).isin(self.predictions)]
         if missing.empty:
@@ -209,6 +232,18 @@ class Replay:
         active = self.active_rows(at)
         model_status = await self.ensure_predictions(active, ml_url, client)
         active_by_vehicle = {str(row.tr_id): row for _, row in active.iterrows()}
+        previous_by_vehicle = {
+            vehicle: previous for vehicle in self.stops
+            if (current := active_by_vehicle.get(vehicle)) is None or
+               str(current.sample_id) not in self.predictions
+            if (previous := self.latest_forecast_row(
+                vehicle, at, str(current.sample_id) if current is not None else None)) is not None
+        }
+        if previous_by_vehicle:
+            fallback_status = await self.ensure_predictions(
+                pd.DataFrame(previous_by_vehicle.values()), ml_url, client)
+            if fallback_status == "unavailable":
+                model_status = "unavailable"
         vehicles = []
         for vehicle, stops in self.stops.items():
             packet = self.position(vehicle, at)
@@ -238,6 +273,7 @@ class Replay:
                          if prior_index >= 0 and (at - prior_times[prior_index]).total_seconds() < 60
                          else None)
             prediction = self.predictions.get(str(row.sample_id)) if row is not None else None
+            forecast_stale = prediction is None
             next_forecast_index = bisect_right(prior_times, at)
             nearest_point = (prior_times[next_forecast_index] if next_forecast_index < len(prior_times)
                              else prior_times[-1] if prior_times else None)
@@ -253,6 +289,16 @@ class Replay:
                     forecast_availability = "stale_gps"
                 nearest_point = None
                 point_direction = None
+            if forecast_stale:
+                row = previous_by_vehicle.get(vehicle)
+                prediction = self.predictions.get(str(row.sample_id)) if row is not None else None
+            prediction_status = None
+            if self.stream and row is not None:
+                ready_ids = self.ready_ids.get(vehicle, [])
+                ready_times = self.ready_times.get(vehicle, [])
+                ready_index = bisect_right(ready_times, at) - 1
+                if ready_index >= 0 and ready_ids[ready_index] == str(row.sample_id):
+                    prediction_status = ready_times[ready_index]
             cause, action = explanation(row) if row is not None and prediction else (None, None)
             target_stop = next((stop for stop in stops if row is not None and stop["id"] == str(row.target_stop_id)), None)
             vehicles.append({
@@ -278,12 +324,16 @@ class Replay:
                 "stoppedDurationSeconds": (float(stream_status.stopped_duration_s)
                                            if stream_status is not None else None),
                 "probability": prediction["probability_delay_over_120s"] if prediction else None,
+                "forecastStale": forecast_stale and prediction is not None,
+                "forecastExpired": (forecast_stale and prediction is not None and row is not None
+                                    and at >= row.target_time_begin),
+                "delayExplanation": prediction.get("delay_explanation") if prediction else None,
                 "forecastTime": row.target_time_begin.isoformat() if row is not None else None,
                 "forecastStopId": str(row.target_stop_id) if row is not None else None,
                 "forecastStop": target_stop,
                 "sampleId": str(row.sample_id) if row is not None else None,
-                "forecastGeneratedAt": (stream_status.available_time.isoformat()
-                                        if stream_status is not None else None),
+                "forecastGeneratedAt": (prediction_status.isoformat() if prediction_status is not None
+                                        else row["T"].isoformat() if row is not None and prediction else None),
                 "forecastPacketId": (str(stream_status.packet_id)
                                      if stream_status is not None else None),
                 "forecastAvailability": forecast_availability,

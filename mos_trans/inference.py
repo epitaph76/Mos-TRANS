@@ -8,7 +8,7 @@ from pathlib import Path
 import joblib
 import numpy as np
 import pandas as pd
-from catboost import CatBoostRegressor
+from catboost import CatBoostRegressor, Pool
 
 from mos_trans.modeling.calibrated_probability import predict as predict_probability
 from mos_trans.modeling.catboost import prepare_categorical_columns
@@ -63,11 +63,40 @@ class Predictor:
             raise ValueError("Non-finite model output")
         if ((probability < 0) | (probability > 1)).any():
             raise ValueError("Probability outside [0, 1]")
-        return pd.DataFrame({
+        result = pd.DataFrame({
             "sample_id": features.sample_id.astype(str).to_numpy(),
             "predicted_delay_s": delay,
             "probability_delay_over_120s": probability,
         })
+        result["delay_explanation"] = None
+        risk_indices = np.flatnonzero((probability >= 0.7) & (delay > 0))
+        if len(risk_indices):
+            categorical = [self.regressor_features.index(name) for name in
+                           ("tr_id", "route_signature", "section_id", "schedule_target_address")
+                           if name in self.regressor_features]
+            pool = Pool(reg_frame.iloc[risk_indices][self.regressor_features], cat_features=categorical)
+            shap_values = np.asarray(self.regressor.get_feature_importance(pool, type="ShapValues"))
+            for index, contributions in zip(risk_indices, shap_values):
+                effects = sorted(zip(self.regressor_features, contributions[:-1]),
+                                 key=lambda item: abs(item[1]), reverse=True)
+                top_effects = effects[:4]
+                result.at[index, "delay_explanation"] = {
+                    "base_seconds": float(contributions[-1]),
+                    "current_deviation_seconds": float(features.iloc[index].cur_dev_s),
+                    "other_seconds": float(sum(value for _, value in effects[4:])),
+                    "factors": [{"feature": name, "impact_seconds": float(value),
+                                 "value": _explanation_value(features.iloc[index].get(name))}
+                                for name, value in top_effects],
+                }
+        return result
+
+
+def _explanation_value(value):
+    if value is None or pd.isna(value):
+        return None
+    if isinstance(value, (np.integer, np.floating)):
+        return float(value)
+    return str(value)
 
 
 def prediction_frame(path: str | Path, predictor: Predictor) -> pd.DataFrame:

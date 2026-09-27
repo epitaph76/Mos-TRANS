@@ -1,8 +1,9 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import * as maplibregl from 'maplibre-gl'
 import type { Map as MapLibreMap, Marker } from 'maplibre-gl'
 import { Crosshair, Layers3 } from 'lucide-react'
-import { type SharedNetwork } from './timeline'
+import { snapToVehicleRoute, type SharedNetwork } from './timeline'
+import { riskStatus } from './risk'
 import 'maplibre-gl/dist/maplibre-gl.css'
 
 maplibregl.setWorkerUrl('/maplibre/maplibre-gl-worker.mjs?v=6.11.2-js-mime')
@@ -10,16 +11,32 @@ maplibregl.setWorkerUrl('/maplibre/maplibre-gl-worker.mjs?v=6.11.2-js-mime')
 type Vehicle = {
   id: string; position: [number, number]; heading: number | null;
   estimateSeconds: number | null; probability: number | null;
+  forecastExpired?: boolean;
+  gpsEventTime?: string | null;
   positionMethod?: 'gps' | 'route' | 'heading'
 }
 type Props = {
   vehicles: Vehicle[]; selected: Vehicle | null; selectedId: string | null;
   onSelect: (id: string) => void;
+  onRouteSelect: (id: string) => void;
   showRoutes: boolean; setShowRoutes: (value: boolean) => void;
   collapsed: boolean; network: SharedNetwork;
+  replayTime: number | null;
 }
 
+type Correction = { from: [number, number]; to: [number, number]; started: number }
+const CORRECTION_MS = 900
+
 function networkGeoJSON(network: SharedNetwork): GeoJSON.FeatureCollection<GeoJSON.LineString> {
+  if (network.roadRoutes) {
+    const owners = network.roadRoutes.segments.map(() => new Set<string>())
+    for (const [vehicleId, sequence] of Object.entries(network.roadRoutes.vehicles))
+      for (const segmentId of sequence) if (segmentId >= 0) owners[segmentId].add(vehicleId)
+    return { type: 'FeatureCollection', features: network.roadRoutes.segments.map((points, index) => ({
+      type: 'Feature', geometry: { type: 'LineString', coordinates: points.map(([lat, lon]) => [lon, lat]) },
+      properties: { owners: [...owners[index]] },
+    })) }
+  }
   return { type: 'FeatureCollection', features: network.edges.map(([a, b, owners]) => ({
     type: 'Feature', geometry: { type: 'LineString', coordinates: [
       [network.nodes[a][1], network.nodes[a][0]],
@@ -31,6 +48,15 @@ function networkGeoJSON(network: SharedNetwork): GeoJSON.FeatureCollection<GeoJS
 function routeBounds(network: SharedNetwork, vehicleId: string) {
   const bounds = new maplibregl.LngLatBounds()
   let count = 0
+  if (network.roadRoutes?.vehicles[vehicleId]) {
+    for (const segmentId of network.roadRoutes.vehicles[vehicleId]) {
+      if (segmentId < 0) continue
+      for (const [lat, lon] of network.roadRoutes.segments[segmentId]) {
+        bounds.extend([lon, lat]); count++
+      }
+    }
+    return count ? bounds : null
+  }
   for (const [a, b, owners] of network.edges) if (owners.includes(vehicleId)) {
     bounds.extend([network.nodes[a][1], network.nodes[a][0]])
     bounds.extend([network.nodes[b][1], network.nodes[b][0]])
@@ -39,13 +65,48 @@ function routeBounds(network: SharedNetwork, vehicleId: string) {
   return count ? bounds : null
 }
 
-export default function TransportMap({ vehicles, selected, selectedId, onSelect,
-  showRoutes, setShowRoutes, collapsed, network }: Props) {
+export default function TransportMap({ vehicles, selected, selectedId, onSelect, onRouteSelect,
+  showRoutes, setShowRoutes, collapsed, network, replayTime }: Props) {
+  const [showHint, setShowHint] = useState(() => {
+    try { return window.localStorage.getItem('mostrans-route-hint-seen') !== '1' }
+    catch { return true }
+  })
+  useEffect(() => {
+    if (!showHint) return
+    try { window.localStorage.setItem('mostrans-route-hint-seen', '1') } catch { /* storage may be unavailable */ }
+    const timer = window.setTimeout(() => setShowHint(false), 6000)
+    return () => window.clearTimeout(timer)
+  }, [showHint])
   const host = useRef<HTMLDivElement>(null)
   const mapRef = useRef<MapLibreMap | null>(null)
   const markers = useRef(new Map<string, Marker>())
+  const corrections = useRef(new Map<string, Correction>())
+  const gpsKeys = useRef(new Map<string, string | null>())
+  const animationFrame = useRef<number | null>(null)
+  const lastReplayTime = useRef<number | null>(null)
   const latestSelect = useRef(onSelect)
   latestSelect.current = onSelect
+  const latestRouteSelect = useRef(onRouteSelect)
+  latestRouteSelect.current = onRouteSelect
+
+  const animateCorrections = () => {
+    animationFrame.current = null
+    const now = performance.now()
+    corrections.current.forEach((correction, id) => {
+      const marker = markers.current.get(id)
+      if (!marker) { corrections.current.delete(id); return }
+      const progress = Math.min(1, (now - correction.started) / CORRECTION_MS)
+      const eased = progress * progress * (3 - 2 * progress)
+      const interpolated: [number, number] = [
+        correction.from[0] + (correction.to[0] - correction.from[0]) * eased,
+        correction.from[1] + (correction.to[1] - correction.from[1]) * eased,
+      ]
+      const [lat, lon] = snapToVehicleRoute([interpolated[1], interpolated[0]], network, id)
+      marker.setLngLat([lon, lat])
+      if (progress === 1) corrections.current.delete(id)
+    })
+    if (corrections.current.size) animationFrame.current = requestAnimationFrame(animateCorrections)
+  }
 
   useEffect(() => {
     if (!host.current) return
@@ -71,20 +132,29 @@ export default function TransportMap({ vehicles, selected, selectedId, onSelect,
         filter: ['==', ['get', 'selected'], true],
         paint: { 'line-color': '#0865ff', 'line-width': 4 },
         layout: { 'line-cap': 'round', 'line-join': 'round' } })
-      map.on('click', 'network', event => {
+      const selectNetwork = (event: maplibregl.MapLayerMouseEvent) => {
         const properties = event.features?.[0]?.properties
         if (!properties) return
         const owners: string[] = typeof properties.owners === 'string' ? JSON.parse(properties.owners) : properties.owners
-        if (owners?.length) latestSelect.current(owners[0])
-      })
+        if (owners?.length) { setShowHint(false); latestRouteSelect.current(owners[0]) }
+      }
+      map.on('click', 'network', selectNetwork)
+      map.on('click', 'selected-network', selectNetwork)
       map.on('mouseenter', 'network', () => { map.getCanvas().style.cursor = 'pointer' })
       map.on('mouseleave', 'network', () => { map.getCanvas().style.cursor = '' })
+      map.on('mouseenter', 'selected-network', () => { map.getCanvas().style.cursor = 'pointer' })
+      map.on('mouseleave', 'selected-network', () => { map.getCanvas().style.cursor = '' })
     }
     map.on('load', installLayers)
     const resize = new ResizeObserver(() => map.resize())
     resize.observe(host.current)
     return () => {
       resize.disconnect()
+      if (animationFrame.current !== null) cancelAnimationFrame(animationFrame.current)
+      animationFrame.current = null
+      corrections.current.clear()
+      gpsKeys.current.clear()
+      lastReplayTime.current = null
       markers.current.forEach(marker => marker.remove())
       markers.current.clear()
       map.remove()
@@ -95,9 +165,15 @@ export default function TransportMap({ vehicles, selected, selectedId, onSelect,
   useEffect(() => {
     const map = mapRef.current
     if (!map) return
+    const timeJump = replayTime !== null && lastReplayTime.current !== null &&
+      (replayTime < lastReplayTime.current - 0.5 || replayTime - lastReplayTime.current > 30)
+    lastReplayTime.current = replayTime
     const visible = new Set(vehicles.map(vehicle => vehicle.id))
     markers.current.forEach((marker, id) => {
-      if (!visible.has(id)) { marker.remove(); markers.current.delete(id) }
+      if (!visible.has(id)) {
+        marker.remove(); markers.current.delete(id)
+        corrections.current.delete(id); gpsKeys.current.delete(id)
+      }
     })
     for (const vehicle of vehicles) {
       let marker = markers.current.get(vehicle.id)
@@ -112,13 +188,26 @@ export default function TransportMap({ vehicles, selected, selectedId, onSelect,
         const created = new maplibregl.Marker({ element, anchor: 'center', subpixelPositioning: true })
           .setLngLat([vehicle.position[1], vehicle.position[0]]).addTo(map)
         markers.current.set(vehicle.id, created)
+        gpsKeys.current.set(vehicle.id, vehicle.gpsEventTime ?? null)
         marker = created
       }
-      marker.setLngLat([vehicle.position[1], vehicle.position[0]])
+      const target: [number, number] = [vehicle.position[1], vehicle.position[0]]
+      const previousGps = gpsKeys.current.get(vehicle.id)
+      const currentGps = vehicle.gpsEventTime ?? null
+      if (!timeJump && previousGps && currentGps && previousGps !== currentGps) {
+        const current = marker.getLngLat()
+        corrections.current.set(vehicle.id, { from: [current.lng, current.lat], to: target, started: performance.now() })
+        if (animationFrame.current === null) animationFrame.current = requestAnimationFrame(animateCorrections)
+      } else if (corrections.current.has(vehicle.id) && !timeJump) {
+        corrections.current.get(vehicle.id)!.to = target
+      } else {
+        corrections.current.delete(vehicle.id)
+        marker.setLngLat(target)
+      }
+      gpsKeys.current.set(vehicle.id, currentGps)
       const element = marker.getElement()
       element.title = `ТС ${vehicle.id} · ${vehicle.positionMethod === 'route' ? 'оценка движения по маршруту' : vehicle.positionMethod === 'heading' ? 'оценка движения по курсу' : 'полученный GPS'}`
-      const probability = vehicle.probability
-      const status = probability === null ? 'unknown' : probability >= 0.6 ? 'critical' : probability >= 0.3 ? 'minor' : 'normal'
+      const status = riskStatus(vehicle.forecastExpired ? null : vehicle.probability)
       element.classList.add('map-bus-marker')
       element.classList.remove('normal', 'minor', 'delay', 'critical', 'early', 'unknown', 'selected', 'dimmed')
       element.classList.add(status)
@@ -126,7 +215,7 @@ export default function TransportMap({ vehicles, selected, selectedId, onSelect,
       else if (selectedId) element.classList.add('dimmed')
       element.style.setProperty('--heading', `${vehicle.heading ?? 0}deg`)
     }
-  }, [vehicles, selectedId])
+  }, [vehicles, selectedId, replayTime])
 
   useEffect(() => {
     const map = mapRef.current
@@ -161,6 +250,7 @@ export default function TransportMap({ vehicles, selected, selectedId, onSelect,
 
   return <div className="map-wrap">
     <div ref={host} className="vector-map" aria-label="Карта транспорта Москвы" />
+    {showRoutes && showHint && <div className="map-route-hint">Нажмите на линию маршрута, чтобы добавить автобус</div>}
     <div className="map-tools">
       <button title="Показать или скрыть траектории" aria-label="Показать или скрыть траектории" className={showRoutes ? 'active' : ''} onClick={() => setShowRoutes(!showRoutes)}><Layers3 size={19} /></button>
       <button title="Вернуться к обзору Москвы" aria-label="Вернуться к обзору Москвы" onClick={() => onSelect('')}><Crosshair size={19} /></button>

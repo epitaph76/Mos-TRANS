@@ -99,8 +99,41 @@ class PredictionTests(unittest.TestCase):
         self.assertLess(np.max(np.abs(result.predicted_delay_s - reg.prediction)), 1e-8)
         self.assertLess(np.max(np.abs(result.probability_delay_over_120s - prob.probability_delay_over_120s)), 1e-8)
 
+    def test_tree_shap_only_for_positive_yellow_or_red_predictions(self):
+        path = ROOT / "data/processed_route/validate_features.parquet"
+        if not path.exists():
+            self.skipTest("Locally prepared dataset is unavailable")
+        result = self.predictor.predict(prediction_frame(path, self.predictor))
+        expected = ((result.probability_delay_over_120s >= 0.7)
+                    & (result.predicted_delay_s > 0))
+        self.assertEqual(result.delay_explanation.notna().tolist(), expected.tolist())
+        self.assertTrue(expected.any())
+        sample = result.loc[expected].iloc[0]
+        explanation = sample.delay_explanation
+        self.assertEqual(len(explanation["factors"]), 4)
+        self.assertTrue(all(np.isfinite(factor["impact_seconds"])
+                            for factor in explanation["factors"]))
+        self.assertTrue(np.isfinite(explanation["base_seconds"]))
+        reconstructed = (explanation["current_deviation_seconds"] +
+                         explanation["base_seconds"] + explanation["other_seconds"] +
+                         sum(factor["impact_seconds"] for factor in explanation["factors"]))
+        self.assertAlmostEqual(reconstructed, sample.predicted_delay_s, places=5)
+
 
 class ReplayTests(unittest.TestCase):
+    def test_last_forecast_never_comes_from_future(self):
+        replay = Replay.__new__(Replay)
+        replay.stream = True
+        before = datetime(2026, 1, 6, 3, 38)
+        after = datetime(2026, 1, 6, 3, 42)
+        replay.ready_times = {"bus": [before, after]}
+        replay.ready_ids = {"bus": ["first", "second"]}
+        replay.rows_by_id = {"first": pd.Series({"sample_id": "first"}),
+                             "second": pd.Series({"sample_id": "second"})}
+        self.assertIsNone(replay.latest_forecast_row("bus", before - timedelta(seconds=1)))
+        self.assertEqual(replay.latest_forecast_row("bus", before).sample_id, "first")
+        self.assertEqual(replay.latest_forecast_row("bus", after, "second").sample_id, "first")
+
     def test_no_unreceived_future_position(self):
         replay = Replay.__new__(Replay)
         t0 = datetime(2026, 1, 6, 12)

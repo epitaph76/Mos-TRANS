@@ -21,6 +21,7 @@ class Prediction(BaseModel):
     sample_id: str
     predicted_delay_s: float
     probability_delay_over_120s: float
+    delay_explanation: dict[str, Any] | None = None
 
 
 class PredictionResponse(BaseModel):

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import struct
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -91,6 +92,7 @@ class LiveStore:
 
     def snapshot(self) -> dict:
         now = datetime.now(timezone.utc)
+        visible_age_s = float(os.getenv("NDTP_VISIBLE_MAX_AGE_S", "120"))
         return {
             "source": "ndtp-emulator",
             "connections": self.connections, "frames": self.frames, "errors": self.errors,
@@ -103,5 +105,6 @@ class LiveStore:
                 "estimateSeconds": None, "probability": None, "sampleId": None,
                 "reason": "Нет привязки к расписанию", "recommendation": "Подключить плановое расписание для устройства",
                 "source": "NDTP-эмулятор",
-            } for packet in self.latest.values()],
+            } for packet in self.latest.values()
+              if (now - packet.received_at).total_seconds() <= visible_age_s],
         }

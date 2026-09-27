@@ -5,8 +5,47 @@ import ts from 'typescript'
 
 const source = readFileSync(new URL('../src/timeline.ts', import.meta.url), 'utf8')
 const { outputText } = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.ESNext } })
-const { positionAt, formatTime, stopSeconds, forecastAt, indexNetwork, snapToNetwork, estimateBetweenFixes } = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString('base64')}`)
+const { positionAt, formatTime, stopSeconds, forecastAt, indexNetwork, snapToNetwork, snapToVehicleRoute, estimateBetweenFixes } = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString('base64')}`)
+const riskSource = readFileSync(new URL('../src/risk.ts', import.meta.url), 'utf8')
+const riskModule = ts.transpileModule(riskSource, { compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.ESNext } })
+const { riskStatus } = await import(`data:text/javascript;base64,${Buffer.from(riskModule.outputText).toString('base64')}`)
+const scenarioSource = readFileSync(new URL('../src/whatIfModel.ts', import.meta.url), 'utf8')
+const scenarioModule = ts.transpileModule(scenarioSource, { compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.ESNext } })
+const { scheduledCycleMinutes, serviceScenario } = await import(`data:text/javascript;base64,${Buffer.from(scenarioModule.outputText).toString('base64')}`)
+const routesSource = readFileSync(new URL('../src/routes.ts', import.meta.url), 'utf8')
+const routesModule = ts.transpileModule(routesSource, { compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.ESNext } })
+const { describeRoutes } = await import(`data:text/javascript;base64,${Buffer.from(routesModule.outputText).toString('base64')}`)
 const track = [[10, 55, 37, 20, 0], [30, 55.002, 37.004, 25, 90], [600, 56, 38, 0, null]]
+
+test('risk colors change only at 70% and 90%', () => {
+  assert.equal(riskStatus(0.699), 'normal')
+  assert.equal(riskStatus(0.7), 'minor')
+  assert.equal(riskStatus(0.899), 'minor')
+  assert.equal(riskStatus(0.9), 'critical')
+  assert.equal(riskStatus(null), 'unknown')
+})
+
+test('what-if uses scheduled returns and the specified fleet', () => {
+  const stops = ['02:45', '03:54', '04:00', '05:11', '05:15', '06:32']
+    .map(time => ({ name: 'Начальная остановка', time: `2026-01-06 ${time}:00` }))
+  assert.equal(scheduledCycleMinutes(stops), 77)
+  const scenario = serviceScenario(80, 4, 1)
+  assert.equal(scenario.beforeHeadway, 20)
+  assert.equal(scenario.afterHeadway, 16)
+  assert.equal(scenario.beforeWait, 10)
+  assert.equal(scenario.afterWait, 8)
+})
+
+test('transport tab groups vehicles sharing scheduled endpoints', () => {
+  const outbound = [{ name: 'Начальная ул., д.1', lat: 55, lon: 37 },
+    { name: 'Конечная ул., д.2', lat: 55.01, lon: 37.02 }]
+  const routes = describeRoutes([
+    { id: 'bus-a', stops: outbound },
+    { id: 'bus-b', stops: [...outbound].reverse() },
+  ])
+  assert.equal(routes.length, 1)
+  assert.deepEqual(routes[0].vehicleIds, ['bus-a', 'bus-b'])
+})
 
 test('positions use only observed fixes, never the next GPS packet', () => {
   assert.equal(positionAt(track, 9), null)
@@ -39,6 +78,7 @@ test('forecast uses no future point and stays within a 10–15 minute horizon', 
 
 test('browser asset contains planned stops and no future GPS track', () => {
   const data = JSON.parse(readFileSync(new URL('../src/data/plan.json', import.meta.url), 'utf8'))
+  const roads = JSON.parse(readFileSync(new URL('../src/data/road_routes.json', import.meta.url), 'utf8'))
   assert(data.start > 0)
   assert(data.end > data.start)
   for (const vehicle of data.vehicles) {
@@ -48,6 +88,10 @@ test('browser asset contains planned stops and no future GPS track', () => {
   assert(data.network.nodes.length > 0)
   assert(data.network.edges.length > 0)
   assert(data.network.edges.every(([a, b, owners]) => a !== b && owners.length > 0))
+  assert(data.vehicles.every(vehicle => roads.vehicles[vehicle.id]?.length === vehicle.stops.length - 1))
+  assert(roads.segments.every(segment => segment.length >= 2))
+  const pairs = Object.values(roads.vehicles).flat()
+  assert(pairs.filter(index => index >= 0).length / pairs.length > 0.95)
 })
 
 test('GPS position snaps only to a nearby corridor owned by the vehicle', () => {
@@ -75,4 +119,22 @@ test('marker moves from the last received fix along the planned route, then acce
   assert.deepEqual(estimateBetweenFixes(start, 0, 90, 10, network, 'bus').position, start)
   assert.deepEqual(estimateBetweenFixes(start, 36, 90, 40, network, 'bus').position,
     estimateBetweenFixes(start, 36, 90, 30, network, 'bus').position)
+})
+
+test('road geometry is used for both GPS snapping and travel around a bend', () => {
+  const network = { mergeMeters: 0, nodes: [], edges: [], roadRoutes: {
+    segments: [[[55, 37], [55, 37.001], [55.001, 37.001]]], vehicles: { bus: [0] },
+  } }
+  const gps = [55.0001, 37.0001]
+  const snapped = estimateBetweenFixes(gps, 36, 90, 0, network, 'bus')
+  assert.equal(snapped.method, 'gps')
+  assert(Math.abs(snapped.position[0] - 55) < 1e-8)
+  const moving = estimateBetweenFixes(gps, 36, 90, 12, network, 'bus')
+  assert.equal(moving.method, 'route')
+  assert(Math.abs(moving.position[1] - 37.001) < 1e-8)
+  assert(moving.position[0] > 55)
+  const distant = estimateBetweenFixes([55.01, 37.01], 36, 90, 5, network, 'bus')
+  assert.equal(distant.method, 'route')
+  assert.deepEqual(snapToVehicleRoute(distant.position, network, 'bus'), distant.position)
+  assert.deepEqual(snapToVehicleRoute([55.0005, 37.0005], network, 'bus'), [55.0005, 37.001])
 })
