@@ -15,7 +15,7 @@ from mos_trans.inference import Predictor
 
 class PredictionRequest(BaseModel):
     features: list[dict[str, Any]] = Field(min_length=1, max_length=256)
-    explain_all: bool = False
+    explain_all: bool | None = None
 
 
 class Prediction(BaseModel):
@@ -27,6 +27,12 @@ class Prediction(BaseModel):
 
 class PredictionResponse(BaseModel):
     predictions: list[Prediction]
+
+
+def explain_all_for(request: PredictionRequest) -> bool:
+    if request.explain_all is not None:
+        return request.explain_all
+    return all(str(row.get("sample_id", "")).startswith("live:") for row in request.features)
 
 
 @asynccontextmanager
@@ -50,7 +56,7 @@ def health() -> dict[str, str]:
 def predict(request: PredictionRequest) -> PredictionResponse:
     try:
         result = app.state.predictor.predict(pd.DataFrame(request.features),
-                                             explain_all=request.explain_all)
+                                             explain_all=explain_all_for(request))
     except (ValueError, KeyError, TypeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return PredictionResponse(predictions=[Prediction(**row) for row in result.to_dict("records")])

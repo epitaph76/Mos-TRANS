@@ -12,6 +12,7 @@ import pandas as pd
 
 from mos_trans.backend_api import Replay, explanation
 from mos_trans.inference import Predictor, prediction_frame
+from mos_trans.ml_api import PredictionRequest, explain_all_for
 from mos_trans.ndtp import NAV, NPH, NPL, LiveStore, crc16_modbus, parse_frame
 
 
@@ -63,6 +64,14 @@ class NdtpTests(unittest.IsolatedAsyncioTestCase):
 
 
 class PredictionTests(unittest.TestCase):
+    def test_live_requests_get_explanations_without_new_backend_flag(self):
+        live = PredictionRequest(features=[{"sample_id": "live:123"}])
+        history = PredictionRequest(features=[{"sample_id": "historical:123"}])
+        self.assertTrue(explain_all_for(live))
+        self.assertFalse(explain_all_for(history))
+        self.assertFalse(explain_all_for(PredictionRequest(
+            features=live.features, explain_all=False)))
+
     @classmethod
     def setUpClass(cls):
         cls.predictor = Predictor(
