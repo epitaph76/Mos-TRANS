@@ -220,11 +220,24 @@ function InactiveRouteDetail({ id, mode, onBack }: { id: string; mode: Mode; onB
 
 function LiveDetail({ vehicle, onBack }: { vehicle: Vehicle; onBack: () => void }) {
   const knownRoute = vehicle.stops.length > 0
+  const status = statusOf(vehicle)
+  const forecastUnavailable = vehicle.forecastAvailability === 'no_target'
+    ? 'По расписанию нет целевой остановки через 10–15 минут от времени пакета.'
+    : vehicle.forecastAvailability === 'off_route'
+      ? 'Координата не сопоставилась с маршрутом и временем расписания.'
+      : vehicle.forecastAvailability === 'bad_gps'
+        ? 'Для расчёта нужна достоверная GPS-координата.'
+        : vehicle.forecastAvailability === 'ml_unavailable'
+          ? 'ML-сервис не ответил. Последний успешный прогноз показан ниже, если он есть.'
+          : vehicle.forecastAvailability === 'pending'
+            ? 'Пакет принят, ожидается ответ ML-сервиса.'
+            : 'Для этого пакета нет прогнозной точки.'
   return <div className="detail-pane">
     <button className="back-button" onClick={onBack}><ArrowLeft size={17} /> К списку ТС</button>
     <div className="vehicle-card-heading"><div className="vehicle-card-title"><span className="detail-bus unknown"><BusFront size={25} /></span><div><h2>{knownRoute ? `ТС ${vehicle.id}` : `Устройство ${vehicle.id}`}</h2><span className="detail-kicker">Живой поток NDTP</span></div></div></div>
-    <div className="prediction-block"><span className="eyebrow">{knownRoute ? 'Маршрут найден в датасете' : 'Маршрут не найден'}</span><p>{knownRoute ? `Пакет принят и сопоставлен с плановым маршрутом.${vehicle.nextStop ? ` Ближайшая следующая остановка: ${vehicle.nextStop.name}.` : ''} Прогноз задержки по живому потоку пока недоступен.` : 'Идентификатор устройства отсутствует в validate/traffic.csv.'}</p></div>
-    <div className="detail-section"><h3>Телеметрия</h3><div className="metric-line"><span>Скорость</span><strong>{vehicle.speed} км/ч</strong></div><div className="metric-line"><span>Последний GPS</span><strong>{Math.round(vehicle.gpsAgeMin * 60)} с назад</strong></div><div className="metric-line"><span>Координаты</span><strong>{vehicle.position[0].toFixed(5)}, {vehicle.position[1].toFixed(5)}</strong></div><div className="metric-line"><span>Двери</span><strong>{vehicle.doorStatus ?? 'Нет данных от устройства'}</strong></div><div className="metric-line"><span>Источник</span><strong>{vehicle.source}</strong></div></div>
+    <div className="prediction-block"><span className="eyebrow">{vehicle.forecastStale ? 'Последний прогноз задержки' : 'Прогноз задержки через 10–15 минут'}</span><strong className={status}>{minutes(vehicle.estimateSeconds)}</strong><p>{vehicle.probability === null ? (knownRoute ? forecastUnavailable : 'Идентификатор устройства отсутствует в validate/traffic.csv.') : `Вероятность опоздания более чем на 2 минуты: ${Math.round(vehicle.probability * 100)}%.`}</p>{vehicle.forecastStale && <p className="forecast-stale-note">Новый прогноз не получен: {forecastUnavailable}</p>}</div>
+    {vehicle.probability !== null && <div className="detail-section"><h3>Прогноз ML</h3><div className="metric-line"><span>Целевая остановка</span><strong>{vehicle.forecastStop?.name ?? vehicle.forecastStopId ?? '—'}</strong></div><div className="metric-line"><span>Плановое прибытие</span><strong>{timeOnly(vehicle.forecastTime)}</strong></div><div className="metric-line"><span>Время пакета</span><strong>{timeOnly(vehicle.forecastGeneratedAt)}</strong></div><div className="metric-line"><span>Текущее отклонение</span><strong>{minutes(vehicle.currentDeviationSeconds)}</strong></div>{vehicle.delayExplanation && <DelayExplanation data={vehicle.delayExplanation} />}</div>}
+    <div className="detail-section"><h3>Телеметрия</h3><div className="metric-line"><span>Скорость</span><strong>{vehicle.speed} км/ч</strong></div><div className="metric-line"><span>Последний GPS</span><strong>{Math.round(vehicle.gpsAgeMin * 60)} с назад</strong></div><div className="metric-line"><span>Координаты</span><strong>{vehicle.position ? `${vehicle.position[0].toFixed(5)}, ${vehicle.position[1].toFixed(5)}` : 'Нет достоверного GPS'}</strong></div><div className="metric-line"><span>Средняя скорость за 5 минут</span><strong>{vehicle.meanSpeed5m === null ? '—' : `${Math.round(vehicle.meanSpeed5m)} км/ч`}</strong></div><div className="metric-line"><span>Источник</span><strong>{vehicle.source}</strong></div></div>
   </div>
 }
 
@@ -362,6 +375,7 @@ function App() {
   })
   const countRisk = displayVehicles.filter(v => statusOf(v) === 'critical').length
   const switchMode = (next: Mode) => {
+    if (next === mode) return
     const url = new URL(window.location.href)
     url.searchParams.delete('autoplay')
     url.searchParams.delete('demo')
